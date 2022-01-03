@@ -2,14 +2,13 @@
 EXTENDS Integers, Sequences
 (* This TLA+ Spec verifies
 
-Stream(1, 2, 3)     // UPSTREAM
-.evalMap(q.enqueue) // QUEUE
-.compile.drain      // DOWNSTREAM
+val pipe = _.take(1)
+
+Stream(1, 2, 3)                        // UPSTREAM
+.evalMap(q.enqueue)                    // QUEUE
+.concurrently(q.dequeue.through(pipe)) // PIPE
+.compile.drain                         // DOWNSTREAM
 *)
-
-\* Constants
-DequeueRequest == "dequeue"
-
 
 (* --algorithm observe
 variables upstreamPending = <<1, 2, 3>>, \* The elements in the upstream Stream(1, 2, 3)
@@ -17,10 +16,9 @@ variables upstreamPending = <<1, 2, 3>>, \* The elements in the upstream Stream(
           downstreamNRequests = 0, \* The number of elements requested by downstream
           downstreamReceived = {}, \* The elements received by downstream from upstream
           downstreamFinished = FALSE, \* Whether downstream has received a "done" message
-          queueRequests = {}, \* The "dequeue" and "enqueue" requests made to the queue
+          queueNRequests = 0, \* The number of "dequeue" requests made to the queue
           queueContents = {}, \* The elements within the queue.
-          \* Temporary variables
-          element = FALSE;
+          pipeContents = {}
 define
 \* Invariants
 (* All elements that have been pulled from upstream were requested by downstream 
@@ -35,6 +33,8 @@ PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
 \* This is a dummy invariant added for testing
 DoneInvariant == ~downstreamFinished
 end define
+process left = "left"
+variable element = FALSE;
 begin
   \* While downstream has not finished
   CheckFinished: while ~downstreamFinished do
@@ -47,12 +47,12 @@ begin
       upstreamPending := Tail(upstreamPending);
       upstreamPulled := upstreamPulled \union {element};
       \* While the queue has not received a dequeue request
-      Loop: while DequeueRequest \notin queueRequests do
+      Loop: while queueNRequests = 0 do
         \* block
         skip;
       end while;
       \* Then remove the "dequeue" request
-      queueRequests := queueRequests \ {DequeueRequest};
+      queueNRequests := queueNRequests -1;
       \* And enqueue the element
       queueContents := queueContents \union {element};
       \* And deliver the element downstream
@@ -63,11 +63,29 @@ begin
       downstreamFinished := TRUE
     end if;
   end while;
+end process;
+
+process right = "right"
+variable element = FALSE;
+begin
+  \* Make a "dequeue" request
+  DequeueRequest: queueNRequests := queueNRequests + 1;
+  \* While there is no element in the queue: loop
+  DequeueBlock: while queueContents = {} do
+    skip;
+  end while;
+  \* Take the element off the queue
+  element := CHOOSE x \in queueContents : TRUE;
+  queueContents := queueContents \ { element} ;
+  \* Receive it in the pipe
+  pipeContents := pipeContents \union {element};
+end process;
 end algorithm *)
-\* BEGIN TRANSLATION (chksum(pcal) = "cff49e2d" /\ chksum(tla) = "e66fd1ab")
+\* BEGIN TRANSLATION (chksum(pcal) = "266c3468" /\ chksum(tla) = "418afc33")
+\* Process variable element of process left at line 35 col 10 changed to element_
 VARIABLES upstreamPending, upstreamPulled, downstreamNRequests, 
-          downstreamReceived, downstreamFinished, queueRequests, 
-          queueContents, element, pc
+          downstreamReceived, downstreamFinished, queueNRequests, 
+          queueContents, pipeContents, pc
 
 (* define statement *)
 PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
@@ -75,10 +93,13 @@ PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
 
 DoneInvariant == ~downstreamFinished
 
+VARIABLES element_, element
 
 vars == << upstreamPending, upstreamPulled, downstreamNRequests, 
-           downstreamReceived, downstreamFinished, queueRequests, 
-           queueContents, element, pc >>
+           downstreamReceived, downstreamFinished, queueNRequests, 
+           queueContents, pipeContents, pc, element_, element >>
+
+ProcSet == {"left"} \cup {"right"}
 
 Init == (* Global variables *)
         /\ upstreamPending = <<1, 2, 3>>
@@ -86,61 +107,94 @@ Init == (* Global variables *)
         /\ downstreamNRequests = 0
         /\ downstreamReceived = {}
         /\ downstreamFinished = FALSE
-        /\ queueRequests = {}
+        /\ queueNRequests = 0
         /\ queueContents = {}
+        /\ pipeContents = {}
+        (* Process left *)
+        /\ element_ = FALSE
+        (* Process right *)
         /\ element = FALSE
-        /\ pc = "CheckFinished"
+        /\ pc = [self \in ProcSet |-> CASE self = "left" -> "CheckFinished"
+                                        [] self = "right" -> "DequeueRequest"]
 
-CheckFinished == /\ pc = "CheckFinished"
+CheckFinished == /\ pc["left"] = "CheckFinished"
                  /\ IF ~downstreamFinished
-                       THEN /\ pc' = "MakeRequest"
-                       ELSE /\ pc' = "Done"
+                       THEN /\ pc' = [pc EXCEPT !["left"] = "MakeRequest"]
+                       ELSE /\ pc' = [pc EXCEPT !["left"] = "Done"]
                  /\ UNCHANGED << upstreamPending, upstreamPulled, 
                                  downstreamNRequests, downstreamReceived, 
-                                 downstreamFinished, queueRequests, 
-                                 queueContents, element >>
+                                 downstreamFinished, queueNRequests, 
+                                 queueContents, pipeContents, element_, 
+                                 element >>
 
-MakeRequest == /\ pc = "MakeRequest"
+MakeRequest == /\ pc["left"] = "MakeRequest"
                /\ downstreamNRequests' = downstreamNRequests + 1
                /\ IF Len(upstreamPending) > 0
-                     THEN /\ element' = Head(upstreamPending)
+                     THEN /\ element_' = Head(upstreamPending)
                           /\ upstreamPending' = Tail(upstreamPending)
-                          /\ upstreamPulled' = (upstreamPulled \union {element'})
-                          /\ pc' = "Loop"
+                          /\ upstreamPulled' = (upstreamPulled \union {element_'})
+                          /\ pc' = [pc EXCEPT !["left"] = "Loop"]
                           /\ UNCHANGED downstreamFinished
                      ELSE /\ downstreamFinished' = TRUE
-                          /\ pc' = "CheckFinished"
+                          /\ pc' = [pc EXCEPT !["left"] = "CheckFinished"]
                           /\ UNCHANGED << upstreamPending, upstreamPulled, 
-                                          element >>
-               /\ UNCHANGED << downstreamReceived, queueRequests, 
-                               queueContents >>
+                                          element_ >>
+               /\ UNCHANGED << downstreamReceived, queueNRequests, 
+                               queueContents, pipeContents, element >>
 
-Loop == /\ pc = "Loop"
-        /\ IF DequeueRequest \notin queueRequests
+Loop == /\ pc["left"] = "Loop"
+        /\ IF queueNRequests = 0
               THEN /\ TRUE
-                   /\ pc' = "Loop"
-                   /\ UNCHANGED << downstreamReceived, queueRequests, 
+                   /\ pc' = [pc EXCEPT !["left"] = "Loop"]
+                   /\ UNCHANGED << downstreamReceived, queueNRequests, 
                                    queueContents >>
-              ELSE /\ queueRequests' = queueRequests \ {DequeueRequest}
-                   /\ queueContents' = (queueContents \union {element})
-                   /\ downstreamReceived' = (downstreamReceived \union {element})
-                   /\ pc' = "CheckFinished"
+              ELSE /\ queueNRequests' = queueNRequests -1
+                   /\ queueContents' = (queueContents \union {element_})
+                   /\ downstreamReceived' = (downstreamReceived \union {element_})
+                   /\ pc' = [pc EXCEPT !["left"] = "CheckFinished"]
         /\ UNCHANGED << upstreamPending, upstreamPulled, downstreamNRequests, 
-                        downstreamFinished, element >>
+                        downstreamFinished, pipeContents, element_, element >>
+
+left == CheckFinished \/ MakeRequest \/ Loop
+
+DequeueRequest == /\ pc["right"] = "DequeueRequest"
+                  /\ queueNRequests' = queueNRequests + 1
+                  /\ pc' = [pc EXCEPT !["right"] = "DequeueBlock"]
+                  /\ UNCHANGED << upstreamPending, upstreamPulled, 
+                                  downstreamNRequests, downstreamReceived, 
+                                  downstreamFinished, queueContents, 
+                                  pipeContents, element_, element >>
+
+DequeueBlock == /\ pc["right"] = "DequeueBlock"
+                /\ IF queueContents = {}
+                      THEN /\ TRUE
+                           /\ pc' = [pc EXCEPT !["right"] = "DequeueBlock"]
+                           /\ UNCHANGED << queueContents, pipeContents, 
+                                           element >>
+                      ELSE /\ element' = (CHOOSE x \in queueContents : TRUE)
+                           /\ queueContents' = queueContents \ { element'}
+                           /\ pipeContents' = (pipeContents \union {element'})
+                           /\ pc' = [pc EXCEPT !["right"] = "Done"]
+                /\ UNCHANGED << upstreamPending, upstreamPulled, 
+                                downstreamNRequests, downstreamReceived, 
+                                downstreamFinished, queueNRequests, element_ >>
+
+right == DequeueRequest \/ DequeueBlock
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
-Terminating == pc = "Done" /\ UNCHANGED vars
+Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
+               /\ UNCHANGED vars
 
-Next == CheckFinished \/ MakeRequest \/ Loop
+Next == left \/ right
            \/ Terminating
 
 Spec == Init /\ [][Next]_vars
 
-Termination == <>(pc = "Done")
+Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 \* END TRANSLATION 
 
 =============================================================================
 \* Modification History
-\* Last modified Mon Jan 03 20:13:55 GMT 2022 by zainab
+\* Last modified Mon Jan 03 22:36:25 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab
