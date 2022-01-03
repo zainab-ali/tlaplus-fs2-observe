@@ -14,7 +14,10 @@ I've been using the [Learn TLA+ website](https://www.learntla.com/introduction/)
 and have recorded my progress in `~/record/tlaplus`. The `~/tlaplus`
 directory contains examples used in the website.
 
-## Prior Art
+## Prior Art on CSP
+
+Note that CSP has a different method of reasoning to that presented in
+TLA+. I'm including this prior art as food for thought.
 
 The easiest model for reasoning about `fs2` is CSP. For example, the
 following code can be split into processes:
@@ -46,3 +49,27 @@ Edwin Brady has a paper on encoding CSP rules in Idris that may be
 helpful, should I try and encode this reasoning using a dependently
 typed Finite State Machine. However, I'll start with TLA+ and see
 where I end up.
+
+# Phrasing the problem
+
+Phrasing a problem in TLA+ seems to be a step-by-step process:
+ 1. Identify the **properties** of the system. 
+    
+	These are the invariants. For example ”all elements that were
+    pulled from upstream must have been requested”.
+
+ 2. Identify the **steps** of the computation.
+ 
+    These are the atomic units that the evaluator can take when
+    interleaving the code. Think “If this was a co-routine, where
+    would it yield?”.
+	
+ 3. Model the **state** that is changed at each step.
+
+    Creating a decent model is somewhat of an art. The primitive types
+    of TLA+ aren’t too similar to a usual programming language.
+
+I expect that the yield points will be the most tricky to identify. It
+would be easy to spec out an incorrect model of the way fs2 works by
+mis-identifying its yield points.
+	
