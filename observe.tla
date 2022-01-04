@@ -40,6 +40,12 @@ The "number of elements requested from downstream" is greater than or equal to t
 *)
 PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
 end define
+
+macro check_queue_cancelled()
+begin
+  if queueCancelled then goto Cancelled end if;
+end macro;
+
 fair process left = "left"
 variable element = -8;
 begin
@@ -83,12 +89,7 @@ begin
   MakeRequestRight:
     while pipeNRequested < pipeTotal /\ ~queueCancelled do
       pipeNRequested := pipeNRequested + 1;
-      CheckCancellation:
-      if queueCancelled then 
-          goto Cancelled;
-        else
-          skip;
-      end if;
+      CheckCancellation: check_queue_cancelled();
       BlockUntilDequeued:
         \* TODO: The right stream is blocked so cannot check the cancellation flag.
         \* Make a "dequeue" request 
@@ -96,29 +97,15 @@ begin
         \* While there is no element in the queue: loop
         BlockUntilDequeuedCheckCancellation:
         while queueContents = {} do
-          if queueCancelled then 
-            goto Cancelled;
-          else
-            skip;
-          end if;
+          check_queue_cancelled();
         end while;
-      CheckCancellation1:
-      if queueCancelled then 
-          goto Cancelled;
-        else
-          skip;
-      end if;
+      CheckCancellation1: check_queue_cancelled();
       Dequeue:
         \* Take the element off the queue
         element := CHOOSE x \in queueContents : TRUE;
         queueContents := queueContents \ { element} ;
         \* Receive it in the pipe
-      CheckCancellation2:
-      if queueCancelled then 
-          goto Cancelled;
-        else
-          skip;
-      end if;
+      CheckCancellation2: check_queue_cancelled();
       Send: 
         pipeContents := pipeContents \union {element};
     end while;
@@ -126,8 +113,8 @@ begin
     skip;
 end process;
 end algorithm *)
-\* BEGIN TRANSLATION (chksum(pcal) = "7de994d6" /\ chksum(tla) = "4e91f49b")
-\* Process variable element of process left at line 41 col 10 changed to element_
+\* BEGIN TRANSLATION (chksum(pcal) = "e5ab2323" /\ chksum(tla) = "3a63e42c")
+\* Process variable element of process left at line 50 col 10 changed to element_
 VARIABLES upstreamTotal, upstreamPending, upstreamPulled, downstreamNRequests, 
           downstreamReceived, downstreamFinished, queueNRequests, 
           queueContents, queueCancelled, pipeTotal, pipeNRequested, 
@@ -241,8 +228,7 @@ MakeRequestRight == /\ pc["right"] = "MakeRequestRight"
 CheckCancellation == /\ pc["right"] = "CheckCancellation"
                      /\ IF queueCancelled
                            THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                           ELSE /\ TRUE
-                                /\ pc' = [pc EXCEPT !["right"] = "BlockUntilDequeued"]
+                           ELSE /\ pc' = [pc EXCEPT !["right"] = "BlockUntilDequeued"]
                      /\ UNCHANGED << upstreamTotal, upstreamPending, 
                                      upstreamPulled, downstreamNRequests, 
                                      downstreamReceived, downstreamFinished, 
@@ -264,8 +250,7 @@ BlockUntilDequeuedCheckCancellation == /\ pc["right"] = "BlockUntilDequeuedCheck
                                        /\ IF queueContents = {}
                                              THEN /\ IF queueCancelled
                                                         THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                                                        ELSE /\ TRUE
-                                                             /\ pc' = [pc EXCEPT !["right"] = "BlockUntilDequeuedCheckCancellation"]
+                                                        ELSE /\ pc' = [pc EXCEPT !["right"] = "BlockUntilDequeuedCheckCancellation"]
                                              ELSE /\ pc' = [pc EXCEPT !["right"] = "CheckCancellation1"]
                                        /\ UNCHANGED << upstreamTotal, 
                                                        upstreamPending, 
@@ -284,8 +269,7 @@ BlockUntilDequeuedCheckCancellation == /\ pc["right"] = "BlockUntilDequeuedCheck
 CheckCancellation1 == /\ pc["right"] = "CheckCancellation1"
                       /\ IF queueCancelled
                             THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                            ELSE /\ TRUE
-                                 /\ pc' = [pc EXCEPT !["right"] = "Dequeue"]
+                            ELSE /\ pc' = [pc EXCEPT !["right"] = "Dequeue"]
                       /\ UNCHANGED << upstreamTotal, upstreamPending, 
                                       upstreamPulled, downstreamNRequests, 
                                       downstreamReceived, downstreamFinished, 
@@ -306,8 +290,7 @@ Dequeue == /\ pc["right"] = "Dequeue"
 CheckCancellation2 == /\ pc["right"] = "CheckCancellation2"
                       /\ IF queueCancelled
                             THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                            ELSE /\ TRUE
-                                 /\ pc' = [pc EXCEPT !["right"] = "Send"]
+                            ELSE /\ pc' = [pc EXCEPT !["right"] = "Send"]
                       /\ UNCHANGED << upstreamTotal, upstreamPending, 
                                       upstreamPulled, downstreamNRequests, 
                                       downstreamReceived, downstreamFinished, 
@@ -355,5 +338,5 @@ Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 =============================================================================
 \* Modification History
-\* Last modified Tue Jan 04 18:38:42 GMT 2022 by zainab
+\* Last modified Tue Jan 04 19:26:14 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab
