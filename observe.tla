@@ -13,6 +13,8 @@ Where upstream can contain 0 to 3 elements.
 
 Note that there is a non-terminating case:
 The left stream will never terminate if pipeTotal = 0 because q.enqueue will block.
+
+If pipeTotal is >= upstreamTotal then the right stream may be cancelled.
 *)
 
 (* --algorithm observe
@@ -26,6 +28,7 @@ variables
           queueNRequests = 0, \* The number of "dequeue" requests made to the queue
           queueContents = {}, \* The elements within the queue.
           queueCancelled = FALSE, \* Whether the queue has been cancelled
+          queueCompleted = FALSE,
           pipeTotal \in 0..3, \* The maximum number of elements requested by the pipe
           pipeNRequested = 0, \* The number of elements that have been requested by the pipe 
           pipeContents = {}
@@ -39,6 +42,7 @@ For all elements in the set of "elements pulled from upstream"
 The "number of elements requested from downstream" is greater than or equal to the element
 *)
 PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
+QueueIsNeverCancelled == ~queueCancelled
 end define
 
 macro check_queue_cancelled()
@@ -77,7 +81,9 @@ begin
           \* Else deliver "done" downstream
           CompleteLeft:
             downstreamFinished := TRUE;
-            queueCancelled := TRUE
+            if ~queueCompleted then
+              queueCancelled := TRUE;
+            end if;
         end if;
     end while;
 end process;
@@ -111,24 +117,29 @@ begin
     end while;
   Cancelled:
     skip;
+  Completed:
+    if ~queueCancelled then
+      queueCompleted := TRUE;
+    end if;
 end process;
 end algorithm *)
-\* BEGIN TRANSLATION (chksum(pcal) = "e5ab2323" /\ chksum(tla) = "3a63e42c")
-\* Process variable element of process left at line 50 col 10 changed to element_
+\* BEGIN TRANSLATION (chksum(pcal) = "dbe545e0" /\ chksum(tla) = "f9443372")
+\* Process variable element of process left at line 52 col 10 changed to element_
 VARIABLES upstreamTotal, upstreamPending, upstreamPulled, downstreamNRequests, 
           downstreamReceived, downstreamFinished, queueNRequests, 
-          queueContents, queueCancelled, pipeTotal, pipeNRequested, 
-          pipeContents, pc
+          queueContents, queueCancelled, queueCompleted, pipeTotal, 
+          pipeNRequested, pipeContents, pc
 
 (* define statement *)
 PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
+QueueIsNeverCancelled == ~queueCancelled
 
 VARIABLES element_, element
 
 vars == << upstreamTotal, upstreamPending, upstreamPulled, 
            downstreamNRequests, downstreamReceived, downstreamFinished, 
-           queueNRequests, queueContents, queueCancelled, pipeTotal, 
-           pipeNRequested, pipeContents, pc, element_, element >>
+           queueNRequests, queueContents, queueCancelled, queueCompleted, 
+           pipeTotal, pipeNRequested, pipeContents, pc, element_, element >>
 
 ProcSet == {"left"} \cup {"right"}
 
@@ -142,7 +153,8 @@ Init == (* Global variables *)
         /\ queueNRequests = 0
         /\ queueContents = {}
         /\ queueCancelled = FALSE
-        /\ pipeTotal \in 0..3
+        /\ queueCompleted = FALSE
+        /\ pipeTotal \in 0..(upstreamTotal - 1)
         /\ pipeNRequested = 0
         /\ pipeContents = {}
         (* Process left *)
@@ -160,8 +172,8 @@ CheckFinished == /\ pc["left"] = "CheckFinished"
                                  upstreamPulled, downstreamNRequests, 
                                  downstreamReceived, downstreamFinished, 
                                  queueNRequests, queueContents, queueCancelled, 
-                                 pipeTotal, pipeNRequested, pipeContents, 
-                                 element_, element >>
+                                 queueCompleted, pipeTotal, pipeNRequested, 
+                                 pipeContents, element_, element >>
 
 MakeRequestLeft == /\ pc["left"] = "MakeRequestLeft"
                    /\ downstreamNRequests' = downstreamNRequests + 1
@@ -175,8 +187,9 @@ MakeRequestLeft == /\ pc["left"] = "MakeRequestLeft"
                                               element_ >>
                    /\ UNCHANGED << upstreamTotal, downstreamReceived, 
                                    downstreamFinished, queueNRequests, 
-                                   queueContents, queueCancelled, pipeTotal, 
-                                   pipeNRequested, pipeContents, element >>
+                                   queueContents, queueCancelled, 
+                                   queueCompleted, pipeTotal, pipeNRequested, 
+                                   pipeContents, element >>
 
 BlockUntilEnqueued == /\ pc["left"] = "BlockUntilEnqueued"
                       /\ queueNRequests > 0
@@ -185,9 +198,9 @@ BlockUntilEnqueued == /\ pc["left"] = "BlockUntilEnqueued"
                                       upstreamPulled, downstreamNRequests, 
                                       downstreamReceived, downstreamFinished, 
                                       queueNRequests, queueContents, 
-                                      queueCancelled, pipeTotal, 
-                                      pipeNRequested, pipeContents, element_, 
-                                      element >>
+                                      queueCancelled, queueCompleted, 
+                                      pipeTotal, pipeNRequested, pipeContents, 
+                                      element_, element >>
 
 Enqueue == /\ pc["left"] = "Enqueue"
            /\ queueNRequests' = queueNRequests -1
@@ -196,18 +209,21 @@ Enqueue == /\ pc["left"] = "Enqueue"
            /\ pc' = [pc EXCEPT !["left"] = "CheckFinished"]
            /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
                            downstreamNRequests, downstreamFinished, 
-                           queueCancelled, pipeTotal, pipeNRequested, 
-                           pipeContents, element_, element >>
+                           queueCancelled, queueCompleted, pipeTotal, 
+                           pipeNRequested, pipeContents, element_, element >>
 
 CompleteLeft == /\ pc["left"] = "CompleteLeft"
                 /\ downstreamFinished' = TRUE
-                /\ queueCancelled' = TRUE
+                /\ IF ~queueCompleted
+                      THEN /\ queueCancelled' = TRUE
+                      ELSE /\ TRUE
+                           /\ UNCHANGED queueCancelled
                 /\ pc' = [pc EXCEPT !["left"] = "CheckFinished"]
                 /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
                                 downstreamNRequests, downstreamReceived, 
-                                queueNRequests, queueContents, pipeTotal, 
-                                pipeNRequested, pipeContents, element_, 
-                                element >>
+                                queueNRequests, queueContents, queueCompleted, 
+                                pipeTotal, pipeNRequested, pipeContents, 
+                                element_, element >>
 
 left == CheckFinished \/ MakeRequestLeft \/ BlockUntilEnqueued \/ Enqueue
            \/ CompleteLeft
@@ -222,8 +238,8 @@ MakeRequestRight == /\ pc["right"] = "MakeRequestRight"
                                     upstreamPulled, downstreamNRequests, 
                                     downstreamReceived, downstreamFinished, 
                                     queueNRequests, queueContents, 
-                                    queueCancelled, pipeTotal, pipeContents, 
-                                    element_, element >>
+                                    queueCancelled, queueCompleted, pipeTotal, 
+                                    pipeContents, element_, element >>
 
 CheckCancellation == /\ pc["right"] = "CheckCancellation"
                      /\ IF queueCancelled
@@ -233,8 +249,9 @@ CheckCancellation == /\ pc["right"] = "CheckCancellation"
                                      upstreamPulled, downstreamNRequests, 
                                      downstreamReceived, downstreamFinished, 
                                      queueNRequests, queueContents, 
-                                     queueCancelled, pipeTotal, pipeNRequested, 
-                                     pipeContents, element_, element >>
+                                     queueCancelled, queueCompleted, pipeTotal, 
+                                     pipeNRequested, pipeContents, element_, 
+                                     element >>
 
 BlockUntilDequeued == /\ pc["right"] = "BlockUntilDequeued"
                       /\ queueNRequests' = queueNRequests + 1
@@ -242,7 +259,8 @@ BlockUntilDequeued == /\ pc["right"] = "BlockUntilDequeued"
                       /\ UNCHANGED << upstreamTotal, upstreamPending, 
                                       upstreamPulled, downstreamNRequests, 
                                       downstreamReceived, downstreamFinished, 
-                                      queueContents, queueCancelled, pipeTotal, 
+                                      queueContents, queueCancelled, 
+                                      queueCompleted, pipeTotal, 
                                       pipeNRequested, pipeContents, element_, 
                                       element >>
 
@@ -261,6 +279,7 @@ BlockUntilDequeuedCheckCancellation == /\ pc["right"] = "BlockUntilDequeuedCheck
                                                        queueNRequests, 
                                                        queueContents, 
                                                        queueCancelled, 
+                                                       queueCompleted, 
                                                        pipeTotal, 
                                                        pipeNRequested, 
                                                        pipeContents, element_, 
@@ -274,9 +293,9 @@ CheckCancellation1 == /\ pc["right"] = "CheckCancellation1"
                                       upstreamPulled, downstreamNRequests, 
                                       downstreamReceived, downstreamFinished, 
                                       queueNRequests, queueContents, 
-                                      queueCancelled, pipeTotal, 
-                                      pipeNRequested, pipeContents, element_, 
-                                      element >>
+                                      queueCancelled, queueCompleted, 
+                                      pipeTotal, pipeNRequested, pipeContents, 
+                                      element_, element >>
 
 Dequeue == /\ pc["right"] = "Dequeue"
            /\ element' = (CHOOSE x \in queueContents : TRUE)
@@ -285,7 +304,8 @@ Dequeue == /\ pc["right"] = "Dequeue"
            /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
                            downstreamNRequests, downstreamReceived, 
                            downstreamFinished, queueNRequests, queueCancelled, 
-                           pipeTotal, pipeNRequested, pipeContents, element_ >>
+                           queueCompleted, pipeTotal, pipeNRequested, 
+                           pipeContents, element_ >>
 
 CheckCancellation2 == /\ pc["right"] = "CheckCancellation2"
                       /\ IF queueCancelled
@@ -295,9 +315,9 @@ CheckCancellation2 == /\ pc["right"] = "CheckCancellation2"
                                       upstreamPulled, downstreamNRequests, 
                                       downstreamReceived, downstreamFinished, 
                                       queueNRequests, queueContents, 
-                                      queueCancelled, pipeTotal, 
-                                      pipeNRequested, pipeContents, element_, 
-                                      element >>
+                                      queueCancelled, queueCompleted, 
+                                      pipeTotal, pipeNRequested, pipeContents, 
+                                      element_, element >>
 
 Send == /\ pc["right"] = "Send"
         /\ pipeContents' = (pipeContents \union {element})
@@ -305,11 +325,23 @@ Send == /\ pc["right"] = "Send"
         /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
                         downstreamNRequests, downstreamReceived, 
                         downstreamFinished, queueNRequests, queueContents, 
-                        queueCancelled, pipeTotal, pipeNRequested, element_, 
-                        element >>
+                        queueCancelled, queueCompleted, pipeTotal, 
+                        pipeNRequested, element_, element >>
 
 Cancelled == /\ pc["right"] = "Cancelled"
              /\ TRUE
+             /\ pc' = [pc EXCEPT !["right"] = "Completed"]
+             /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
+                             downstreamNRequests, downstreamReceived, 
+                             downstreamFinished, queueNRequests, queueContents, 
+                             queueCancelled, queueCompleted, pipeTotal, 
+                             pipeNRequested, pipeContents, element_, element >>
+
+Completed == /\ pc["right"] = "Completed"
+             /\ IF ~queueCancelled
+                   THEN /\ queueCompleted' = TRUE
+                   ELSE /\ TRUE
+                        /\ UNCHANGED queueCompleted
              /\ pc' = [pc EXCEPT !["right"] = "Done"]
              /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
                              downstreamNRequests, downstreamReceived, 
@@ -320,6 +352,7 @@ Cancelled == /\ pc["right"] = "Cancelled"
 right == MakeRequestRight \/ CheckCancellation \/ BlockUntilDequeued
             \/ BlockUntilDequeuedCheckCancellation \/ CheckCancellation1
             \/ Dequeue \/ CheckCancellation2 \/ Send \/ Cancelled
+            \/ Completed
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
@@ -338,5 +371,5 @@ Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 =============================================================================
 \* Modification History
-\* Last modified Tue Jan 04 19:26:14 GMT 2022 by zainab
+\* Last modified Tue Jan 04 19:39:01 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab

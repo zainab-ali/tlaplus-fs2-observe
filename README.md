@@ -73,3 +73,47 @@ I expect that the yield points will be the most tricky to identify. It
 would be easy to spec out an incorrect model of the way fs2 works by
 mis-identifying its yield points.
 	
+
+# Identifying yield points
+
+The yield points are dependent on the fs2 `Pull` interrupt semantics,
+as defined in the pull `compile` function, and the cats-effect `race`
+semantics.
+
+To simplify things, we can assume that a program can yield at every
+`flatMap`, and that `race` polls a completion flag for two
+operations.
+
+# Iterating the code
+
+A naive attempt at `observe` would be:
+
+```scala
+upstream
+  .evalMap(q.enqueue)
+  .concurrently(q.dequeue.through(pipe))
+```
+
+There are a few problems with this implementation:
+ - It does not terminate if the `pipe` requests fewer elements than
+   are pulled by the output stream
+ - The pipe is cancelled nondeterministically (sometimes the left stream terminates first).
+
+These can both be identified by TLA+.
+
+The next attempt should tackle the cancellation.
+
+```
+upstream.evalMap(q.enqueue)
+  .concurrently(q.dequeue.through(pipe))
+  
+// Only when the upstream terminates do we close the queue
+q.dequeue
+  .concurrently(
+  upstream.evalTap(q.enqueue).through(pipe) ++ q.close
+  )
+```
+
+It would be worth writing some library code for:
+ - the `q.dequeue` process
+ - the `evalTap(q.enqueue)` process
