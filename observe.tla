@@ -9,6 +9,11 @@ upstream                               // UPSTREAM
 .concurrently(q.dequeue.through(pipe)) // PIPE
 .compile.drain                         // DOWNSTREAM
 
+q.dequeue                              // DEQUEUE
+  .concurrently(
+  upstream.evalTap(q.enqueue).through(pipe) ++ q.close
+)
+
 Where upstream can contain 0 to 3 elements.
 
 Note that there is a non-terminating case:
@@ -43,11 +48,20 @@ The "number of elements requested from downstream" is greater than or equal to t
 *)
 PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
 QueueIsNeverCancelled == ~queueCancelled
+
+\* Constants
+QStateRunning == "Running"
+QStateCancelled == "Cancelled"
+QStateCompleted == "Completed"
+
+ElNull == -1 \* The initial value of a temporary element variable
+ElNone == -2 \* Represents a q.close or effectively a Pull.done
+
 end define
 
 macro check_queue_cancelled()
 begin
-  if queueCancelled then goto Cancelled end if;
+  if state = QStateCancelled then goto Cancelled end if;
 end macro;
 
 fair process left = "left"
@@ -88,43 +102,73 @@ begin
     end while;
 end process;
 
-fair process right = "right"
-variable element = -9;
+(*
+A process representing the q.dequeue stream. This is able to run on either the left or right side of
+a concurrently such that the following code is represented:
+ 
+ q.dequeue.concurrently(right)
+ left.concurrently(q.dequeue)
+
+It should have several abilities:
+ - It can be cancelled
+ - If there is no element in the queue, it registers itself as a listener on the queue
+
+The left and right branches of a concurrently block are treated in different ways. 
+This is because the left branch needs to know about the stream it is embedded in (downstream)
+while the right branch does not.
+
+We could model this as a CSP-like process, where a request from downstream is submitted into a mailbox.
+In the left branch, a request is only submitted when downstream wants one. In the right branch, 
+a request is always submitted.
+
+Alternatively, we could assume that this was always connected to a .take(N).compile.drain. This would make it more accurate.
+*)
+fair process dequeue \in {"dequeue"}
+variable \* Global variables
+         state = QStateRunning, \* Whether the queue has been completed or cancelled. This is global mutable state.
+         requestedN = 0,        \* The number of dequeue requests made. This is a global variable of the queue.
+         \* Local variables. We may want to have invariants based on these.
+         el = -1,               \* The current element being dequeued. 
+         takeN = 0..3,          \* The total number of dequeues to request
+         receivedEls = {};      \* The elements that have been dequeued     
 begin 
   \* While the pipe has not finished
-  MakeRequestRight:
-    while pipeNRequested < pipeTotal /\ ~queueCancelled do
-      pipeNRequested := pipeNRequested + 1;
-      CheckCancellation: check_queue_cancelled();
-      BlockUntilDequeued:
-        \* TODO: The right stream is blocked so cannot check the cancellation flag.
+  Take:
+    while requestedN < takeN /\ state = QStateRunning do
+      CheckCancellationBeforeRequest: 
+        check_queue_cancelled();
+      Request:
         \* Make a "dequeue" request 
-        queueNRequests := queueNRequests + 1;
-        \* While there is no element in the queue: loop
-        BlockUntilDequeuedCheckCancellation:
+        requestedN := requestedN + 1;
+      \* While there is no element in the queue: loop
+      Spin:
         while queueContents = {} do
-          check_queue_cancelled();
+          CheckCancellationInSpin: 
+            check_queue_cancelled();
         end while;
-      CheckCancellation1: check_queue_cancelled();
-      Dequeue:
+      CheckCancellationBeforeGet:
+        check_queue_cancelled();
+      Get:
         \* Take the element off the queue
-        element := CHOOSE x \in queueContents : TRUE;
-        queueContents := queueContents \ { element} ;
-        \* Receive it in the pipe
-      CheckCancellation2: check_queue_cancelled();
-      Send: 
-        pipeContents := pipeContents \union {element};
+        el := CHOOSE x \in queueContents : TRUE;
+        queueContents := queueContents \ {el} ;
+      CheckCompletion:
+        if el = ElNone then
+          goto Completed;
+        end if;
+      \* Receive it in the pipe
+      CheckCancellationBeforeReceive: 
+        check_queue_cancelled();
+      Receive:
+        receivedEls := receivedEls \union {element};
     end while;
+  Completed:
+     state := QStateCompleted;
   Cancelled:
     skip;
-  Completed:
-    if ~queueCancelled then
-      queueCompleted := TRUE;
-    end if;
 end process;
 end algorithm *)
-\* BEGIN TRANSLATION (chksum(pcal) = "dbe545e0" /\ chksum(tla) = "f9443372")
-\* Process variable element of process left at line 52 col 10 changed to element_
+\* BEGIN TRANSLATION (chksum(pcal) = "7efbc0fa" /\ chksum(tla) = "ba710627")
 VARIABLES upstreamTotal, upstreamPending, upstreamPulled, downstreamNRequests, 
           downstreamReceived, downstreamFinished, queueNRequests, 
           queueContents, queueCancelled, queueCompleted, pipeTotal, 
@@ -134,14 +178,22 @@ VARIABLES upstreamTotal, upstreamPending, upstreamPulled, downstreamNRequests,
 PulledRequestedInvariant == \A e \in upstreamPulled : e <= downstreamNRequests
 QueueIsNeverCancelled == ~queueCancelled
 
-VARIABLES element_, element
+
+QStateRunning == "Running"
+QStateCancelled == "Cancelled"
+QStateCompleted == "Completed"
+
+ElNone == -2
+
+VARIABLES element, state, requestedN, el, takeN, receivedEls
 
 vars == << upstreamTotal, upstreamPending, upstreamPulled, 
            downstreamNRequests, downstreamReceived, downstreamFinished, 
            queueNRequests, queueContents, queueCancelled, queueCompleted, 
-           pipeTotal, pipeNRequested, pipeContents, pc, element_, element >>
+           pipeTotal, pipeNRequested, pipeContents, pc, element, state, 
+           requestedN, el, takeN, receivedEls >>
 
-ProcSet == {"left"} \cup {"right"}
+ProcSet == {"left"} \cup ({"dequeue"})
 
 Init == (* Global variables *)
         /\ upstreamTotal \in 0..3
@@ -154,15 +206,19 @@ Init == (* Global variables *)
         /\ queueContents = {}
         /\ queueCancelled = FALSE
         /\ queueCompleted = FALSE
-        /\ pipeTotal \in 0..(upstreamTotal - 1)
+        /\ pipeTotal \in 0..3
         /\ pipeNRequested = 0
         /\ pipeContents = {}
         (* Process left *)
-        /\ element_ = -8
-        (* Process right *)
-        /\ element = -9
+        /\ element = -8
+        (* Process dequeue *)
+        /\ state = [self \in {"dequeue"} |-> QStateRunning]
+        /\ requestedN = [self \in {"dequeue"} |-> 0]
+        /\ el = [self \in {"dequeue"} |-> -1]
+        /\ takeN = [self \in {"dequeue"} |-> 0..3]
+        /\ receivedEls = [self \in {"dequeue"} |-> {}]
         /\ pc = [self \in ProcSet |-> CASE self = "left" -> "CheckFinished"
-                                        [] self = "right" -> "MakeRequestRight"]
+                                        [] self \in {"dequeue"} -> "Take"]
 
 CheckFinished == /\ pc["left"] = "CheckFinished"
                  /\ IF ~downstreamFinished
@@ -173,23 +229,25 @@ CheckFinished == /\ pc["left"] = "CheckFinished"
                                  downstreamReceived, downstreamFinished, 
                                  queueNRequests, queueContents, queueCancelled, 
                                  queueCompleted, pipeTotal, pipeNRequested, 
-                                 pipeContents, element_, element >>
+                                 pipeContents, element, state, requestedN, el, 
+                                 takeN, receivedEls >>
 
 MakeRequestLeft == /\ pc["left"] = "MakeRequestLeft"
                    /\ downstreamNRequests' = downstreamNRequests + 1
                    /\ IF upstreamPending > 0
-                         THEN /\ element_' = upstreamTotal - upstreamPending + 1
+                         THEN /\ element' = upstreamTotal - upstreamPending + 1
                               /\ upstreamPending' = upstreamPending - 1
-                              /\ upstreamPulled' = (upstreamPulled \union {element_'})
+                              /\ upstreamPulled' = (upstreamPulled \union {element'})
                               /\ pc' = [pc EXCEPT !["left"] = "BlockUntilEnqueued"]
                          ELSE /\ pc' = [pc EXCEPT !["left"] = "CompleteLeft"]
                               /\ UNCHANGED << upstreamPending, upstreamPulled, 
-                                              element_ >>
+                                              element >>
                    /\ UNCHANGED << upstreamTotal, downstreamReceived, 
                                    downstreamFinished, queueNRequests, 
                                    queueContents, queueCancelled, 
                                    queueCompleted, pipeTotal, pipeNRequested, 
-                                   pipeContents, element >>
+                                   pipeContents, state, requestedN, el, takeN, 
+                                   receivedEls >>
 
 BlockUntilEnqueued == /\ pc["left"] = "BlockUntilEnqueued"
                       /\ queueNRequests > 0
@@ -200,17 +258,19 @@ BlockUntilEnqueued == /\ pc["left"] = "BlockUntilEnqueued"
                                       queueNRequests, queueContents, 
                                       queueCancelled, queueCompleted, 
                                       pipeTotal, pipeNRequested, pipeContents, 
-                                      element_, element >>
+                                      element, state, requestedN, el, takeN, 
+                                      receivedEls >>
 
 Enqueue == /\ pc["left"] = "Enqueue"
            /\ queueNRequests' = queueNRequests -1
-           /\ queueContents' = (queueContents \union {element_})
-           /\ downstreamReceived' = (downstreamReceived \union {element_})
+           /\ queueContents' = (queueContents \union {element})
+           /\ downstreamReceived' = (downstreamReceived \union {element})
            /\ pc' = [pc EXCEPT !["left"] = "CheckFinished"]
            /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
                            downstreamNRequests, downstreamFinished, 
                            queueCancelled, queueCompleted, pipeTotal, 
-                           pipeNRequested, pipeContents, element_, element >>
+                           pipeNRequested, pipeContents, element, state, 
+                           requestedN, el, takeN, receivedEls >>
 
 CompleteLeft == /\ pc["left"] = "CompleteLeft"
                 /\ downstreamFinished' = TRUE
@@ -223,147 +283,198 @@ CompleteLeft == /\ pc["left"] = "CompleteLeft"
                                 downstreamNRequests, downstreamReceived, 
                                 queueNRequests, queueContents, queueCompleted, 
                                 pipeTotal, pipeNRequested, pipeContents, 
-                                element_, element >>
+                                element, state, requestedN, el, takeN, 
+                                receivedEls >>
 
 left == CheckFinished \/ MakeRequestLeft \/ BlockUntilEnqueued \/ Enqueue
            \/ CompleteLeft
 
-MakeRequestRight == /\ pc["right"] = "MakeRequestRight"
-                    /\ IF pipeNRequested < pipeTotal /\ ~queueCancelled
-                          THEN /\ pipeNRequested' = pipeNRequested + 1
-                               /\ pc' = [pc EXCEPT !["right"] = "CheckCancellation"]
-                          ELSE /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                               /\ UNCHANGED pipeNRequested
-                    /\ UNCHANGED << upstreamTotal, upstreamPending, 
-                                    upstreamPulled, downstreamNRequests, 
-                                    downstreamReceived, downstreamFinished, 
-                                    queueNRequests, queueContents, 
-                                    queueCancelled, queueCompleted, pipeTotal, 
-                                    pipeContents, element_, element >>
+Take(self) == /\ pc[self] = "Take"
+              /\ IF requestedN[self] < takeN[self] /\ state[self] = QStateRunning
+                    THEN /\ pc' = [pc EXCEPT ![self] = "CheckCancellationBeforeRequest"]
+                    ELSE /\ pc' = [pc EXCEPT ![self] = "Completed"]
+              /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
+                              downstreamNRequests, downstreamReceived, 
+                              downstreamFinished, queueNRequests, 
+                              queueContents, queueCancelled, queueCompleted, 
+                              pipeTotal, pipeNRequested, pipeContents, element, 
+                              state, requestedN, el, takeN, receivedEls >>
 
-CheckCancellation == /\ pc["right"] = "CheckCancellation"
-                     /\ IF queueCancelled
-                           THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                           ELSE /\ pc' = [pc EXCEPT !["right"] = "BlockUntilDequeued"]
-                     /\ UNCHANGED << upstreamTotal, upstreamPending, 
-                                     upstreamPulled, downstreamNRequests, 
-                                     downstreamReceived, downstreamFinished, 
-                                     queueNRequests, queueContents, 
-                                     queueCancelled, queueCompleted, pipeTotal, 
-                                     pipeNRequested, pipeContents, element_, 
-                                     element >>
+CheckCancellationBeforeRequest(self) == /\ pc[self] = "CheckCancellationBeforeRequest"
+                                        /\ IF state[self] = QStateCancelled
+                                              THEN /\ pc' = [pc EXCEPT ![self] = "Cancelled"]
+                                              ELSE /\ pc' = [pc EXCEPT ![self] = "Request"]
+                                        /\ UNCHANGED << upstreamTotal, 
+                                                        upstreamPending, 
+                                                        upstreamPulled, 
+                                                        downstreamNRequests, 
+                                                        downstreamReceived, 
+                                                        downstreamFinished, 
+                                                        queueNRequests, 
+                                                        queueContents, 
+                                                        queueCancelled, 
+                                                        queueCompleted, 
+                                                        pipeTotal, 
+                                                        pipeNRequested, 
+                                                        pipeContents, element, 
+                                                        state, requestedN, el, 
+                                                        takeN, receivedEls >>
 
-BlockUntilDequeued == /\ pc["right"] = "BlockUntilDequeued"
-                      /\ queueNRequests' = queueNRequests + 1
-                      /\ pc' = [pc EXCEPT !["right"] = "BlockUntilDequeuedCheckCancellation"]
-                      /\ UNCHANGED << upstreamTotal, upstreamPending, 
-                                      upstreamPulled, downstreamNRequests, 
-                                      downstreamReceived, downstreamFinished, 
-                                      queueContents, queueCancelled, 
-                                      queueCompleted, pipeTotal, 
-                                      pipeNRequested, pipeContents, element_, 
-                                      element >>
+Request(self) == /\ pc[self] = "Request"
+                 /\ requestedN' = [requestedN EXCEPT ![self] = requestedN[self] + 1]
+                 /\ pc' = [pc EXCEPT ![self] = "Spin"]
+                 /\ UNCHANGED << upstreamTotal, upstreamPending, 
+                                 upstreamPulled, downstreamNRequests, 
+                                 downstreamReceived, downstreamFinished, 
+                                 queueNRequests, queueContents, queueCancelled, 
+                                 queueCompleted, pipeTotal, pipeNRequested, 
+                                 pipeContents, element, state, el, takeN, 
+                                 receivedEls >>
 
-BlockUntilDequeuedCheckCancellation == /\ pc["right"] = "BlockUntilDequeuedCheckCancellation"
-                                       /\ IF queueContents = {}
-                                             THEN /\ IF queueCancelled
-                                                        THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                                                        ELSE /\ pc' = [pc EXCEPT !["right"] = "BlockUntilDequeuedCheckCancellation"]
-                                             ELSE /\ pc' = [pc EXCEPT !["right"] = "CheckCancellation1"]
-                                       /\ UNCHANGED << upstreamTotal, 
-                                                       upstreamPending, 
-                                                       upstreamPulled, 
-                                                       downstreamNRequests, 
-                                                       downstreamReceived, 
-                                                       downstreamFinished, 
-                                                       queueNRequests, 
-                                                       queueContents, 
-                                                       queueCancelled, 
-                                                       queueCompleted, 
-                                                       pipeTotal, 
-                                                       pipeNRequested, 
-                                                       pipeContents, element_, 
-                                                       element >>
+Spin(self) == /\ pc[self] = "Spin"
+              /\ IF queueContents = {}
+                    THEN /\ pc' = [pc EXCEPT ![self] = "CheckCancellationInSpin"]
+                    ELSE /\ pc' = [pc EXCEPT ![self] = "CheckCancellationBeforeGet"]
+              /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
+                              downstreamNRequests, downstreamReceived, 
+                              downstreamFinished, queueNRequests, 
+                              queueContents, queueCancelled, queueCompleted, 
+                              pipeTotal, pipeNRequested, pipeContents, element, 
+                              state, requestedN, el, takeN, receivedEls >>
 
-CheckCancellation1 == /\ pc["right"] = "CheckCancellation1"
-                      /\ IF queueCancelled
-                            THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                            ELSE /\ pc' = [pc EXCEPT !["right"] = "Dequeue"]
-                      /\ UNCHANGED << upstreamTotal, upstreamPending, 
-                                      upstreamPulled, downstreamNRequests, 
-                                      downstreamReceived, downstreamFinished, 
-                                      queueNRequests, queueContents, 
-                                      queueCancelled, queueCompleted, 
-                                      pipeTotal, pipeNRequested, pipeContents, 
-                                      element_, element >>
+CheckCancellationInSpin(self) == /\ pc[self] = "CheckCancellationInSpin"
+                                 /\ IF state[self] = QStateCancelled
+                                       THEN /\ pc' = [pc EXCEPT ![self] = "Cancelled"]
+                                       ELSE /\ pc' = [pc EXCEPT ![self] = "Spin"]
+                                 /\ UNCHANGED << upstreamTotal, 
+                                                 upstreamPending, 
+                                                 upstreamPulled, 
+                                                 downstreamNRequests, 
+                                                 downstreamReceived, 
+                                                 downstreamFinished, 
+                                                 queueNRequests, queueContents, 
+                                                 queueCancelled, 
+                                                 queueCompleted, pipeTotal, 
+                                                 pipeNRequested, pipeContents, 
+                                                 element, state, requestedN, 
+                                                 el, takeN, receivedEls >>
 
-Dequeue == /\ pc["right"] = "Dequeue"
-           /\ element' = (CHOOSE x \in queueContents : TRUE)
-           /\ queueContents' = queueContents \ { element'}
-           /\ pc' = [pc EXCEPT !["right"] = "CheckCancellation2"]
-           /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
-                           downstreamNRequests, downstreamReceived, 
-                           downstreamFinished, queueNRequests, queueCancelled, 
-                           queueCompleted, pipeTotal, pipeNRequested, 
-                           pipeContents, element_ >>
+CheckCancellationBeforeGet(self) == /\ pc[self] = "CheckCancellationBeforeGet"
+                                    /\ IF state[self] = QStateCancelled
+                                          THEN /\ pc' = [pc EXCEPT ![self] = "Cancelled"]
+                                          ELSE /\ pc' = [pc EXCEPT ![self] = "Get"]
+                                    /\ UNCHANGED << upstreamTotal, 
+                                                    upstreamPending, 
+                                                    upstreamPulled, 
+                                                    downstreamNRequests, 
+                                                    downstreamReceived, 
+                                                    downstreamFinished, 
+                                                    queueNRequests, 
+                                                    queueContents, 
+                                                    queueCancelled, 
+                                                    queueCompleted, pipeTotal, 
+                                                    pipeNRequested, 
+                                                    pipeContents, element, 
+                                                    state, requestedN, el, 
+                                                    takeN, receivedEls >>
 
-CheckCancellation2 == /\ pc["right"] = "CheckCancellation2"
-                      /\ IF queueCancelled
-                            THEN /\ pc' = [pc EXCEPT !["right"] = "Cancelled"]
-                            ELSE /\ pc' = [pc EXCEPT !["right"] = "Send"]
-                      /\ UNCHANGED << upstreamTotal, upstreamPending, 
-                                      upstreamPulled, downstreamNRequests, 
-                                      downstreamReceived, downstreamFinished, 
-                                      queueNRequests, queueContents, 
-                                      queueCancelled, queueCompleted, 
-                                      pipeTotal, pipeNRequested, pipeContents, 
-                                      element_, element >>
-
-Send == /\ pc["right"] = "Send"
-        /\ pipeContents' = (pipeContents \union {element})
-        /\ pc' = [pc EXCEPT !["right"] = "MakeRequestRight"]
-        /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
-                        downstreamNRequests, downstreamReceived, 
-                        downstreamFinished, queueNRequests, queueContents, 
-                        queueCancelled, queueCompleted, pipeTotal, 
-                        pipeNRequested, element_, element >>
-
-Cancelled == /\ pc["right"] = "Cancelled"
-             /\ TRUE
-             /\ pc' = [pc EXCEPT !["right"] = "Completed"]
+Get(self) == /\ pc[self] = "Get"
+             /\ el' = [el EXCEPT ![self] = CHOOSE x \in queueContents : TRUE]
+             /\ queueContents' = queueContents \ {el'[self]}
+             /\ pc' = [pc EXCEPT ![self] = "CheckCompletion"]
              /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
                              downstreamNRequests, downstreamReceived, 
-                             downstreamFinished, queueNRequests, queueContents, 
+                             downstreamFinished, queueNRequests, 
                              queueCancelled, queueCompleted, pipeTotal, 
-                             pipeNRequested, pipeContents, element_, element >>
+                             pipeNRequested, pipeContents, element, state, 
+                             requestedN, takeN, receivedEls >>
 
-Completed == /\ pc["right"] = "Completed"
-             /\ IF ~queueCancelled
-                   THEN /\ queueCompleted' = TRUE
-                   ELSE /\ TRUE
-                        /\ UNCHANGED queueCompleted
-             /\ pc' = [pc EXCEPT !["right"] = "Done"]
-             /\ UNCHANGED << upstreamTotal, upstreamPending, upstreamPulled, 
-                             downstreamNRequests, downstreamReceived, 
-                             downstreamFinished, queueNRequests, queueContents, 
-                             queueCancelled, pipeTotal, pipeNRequested, 
-                             pipeContents, element_, element >>
+CheckCompletion(self) == /\ pc[self] = "CheckCompletion"
+                         /\ IF el[self] = ElNone
+                               THEN /\ pc' = [pc EXCEPT ![self] = "Completed"]
+                               ELSE /\ pc' = [pc EXCEPT ![self] = "CheckCancellationBeforeReceive"]
+                         /\ UNCHANGED << upstreamTotal, upstreamPending, 
+                                         upstreamPulled, downstreamNRequests, 
+                                         downstreamReceived, 
+                                         downstreamFinished, queueNRequests, 
+                                         queueContents, queueCancelled, 
+                                         queueCompleted, pipeTotal, 
+                                         pipeNRequested, pipeContents, element, 
+                                         state, requestedN, el, takeN, 
+                                         receivedEls >>
 
-right == MakeRequestRight \/ CheckCancellation \/ BlockUntilDequeued
-            \/ BlockUntilDequeuedCheckCancellation \/ CheckCancellation1
-            \/ Dequeue \/ CheckCancellation2 \/ Send \/ Cancelled
-            \/ Completed
+CheckCancellationBeforeReceive(self) == /\ pc[self] = "CheckCancellationBeforeReceive"
+                                        /\ IF state[self] = QStateCancelled
+                                              THEN /\ pc' = [pc EXCEPT ![self] = "Cancelled"]
+                                              ELSE /\ pc' = [pc EXCEPT ![self] = "Receive"]
+                                        /\ UNCHANGED << upstreamTotal, 
+                                                        upstreamPending, 
+                                                        upstreamPulled, 
+                                                        downstreamNRequests, 
+                                                        downstreamReceived, 
+                                                        downstreamFinished, 
+                                                        queueNRequests, 
+                                                        queueContents, 
+                                                        queueCancelled, 
+                                                        queueCompleted, 
+                                                        pipeTotal, 
+                                                        pipeNRequested, 
+                                                        pipeContents, element, 
+                                                        state, requestedN, el, 
+                                                        takeN, receivedEls >>
+
+Receive(self) == /\ pc[self] = "Receive"
+                 /\ receivedEls' = [receivedEls EXCEPT ![self] = receivedEls[self] \union {element}]
+                 /\ pc' = [pc EXCEPT ![self] = "Take"]
+                 /\ UNCHANGED << upstreamTotal, upstreamPending, 
+                                 upstreamPulled, downstreamNRequests, 
+                                 downstreamReceived, downstreamFinished, 
+                                 queueNRequests, queueContents, queueCancelled, 
+                                 queueCompleted, pipeTotal, pipeNRequested, 
+                                 pipeContents, element, state, requestedN, el, 
+                                 takeN >>
+
+Completed(self) == /\ pc[self] = "Completed"
+                   /\ state' = [state EXCEPT ![self] = QStateCompleted]
+                   /\ pc' = [pc EXCEPT ![self] = "Cancelled"]
+                   /\ UNCHANGED << upstreamTotal, upstreamPending, 
+                                   upstreamPulled, downstreamNRequests, 
+                                   downstreamReceived, downstreamFinished, 
+                                   queueNRequests, queueContents, 
+                                   queueCancelled, queueCompleted, pipeTotal, 
+                                   pipeNRequested, pipeContents, element, 
+                                   requestedN, el, takeN, receivedEls >>
+
+Cancelled(self) == /\ pc[self] = "Cancelled"
+                   /\ TRUE
+                   /\ pc' = [pc EXCEPT ![self] = "Done"]
+                   /\ UNCHANGED << upstreamTotal, upstreamPending, 
+                                   upstreamPulled, downstreamNRequests, 
+                                   downstreamReceived, downstreamFinished, 
+                                   queueNRequests, queueContents, 
+                                   queueCancelled, queueCompleted, pipeTotal, 
+                                   pipeNRequested, pipeContents, element, 
+                                   state, requestedN, el, takeN, receivedEls >>
+
+dequeue(self) == Take(self) \/ CheckCancellationBeforeRequest(self)
+                    \/ Request(self) \/ Spin(self)
+                    \/ CheckCancellationInSpin(self)
+                    \/ CheckCancellationBeforeGet(self) \/ Get(self)
+                    \/ CheckCompletion(self)
+                    \/ CheckCancellationBeforeReceive(self)
+                    \/ Receive(self) \/ Completed(self) \/ Cancelled(self)
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
                /\ UNCHANGED vars
 
-Next == left \/ right
+Next == left
+           \/ (\E self \in {"dequeue"}: dequeue(self))
            \/ Terminating
 
 Spec == /\ Init /\ [][Next]_vars
         /\ WF_vars(left)
-        /\ WF_vars(right)
+        /\ \A self \in {"dequeue"} : WF_vars(dequeue(self))
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
@@ -371,5 +482,5 @@ Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 =============================================================================
 \* Modification History
-\* Last modified Tue Jan 04 19:39:01 GMT 2022 by zainab
+\* Last modified Wed Jan 05 19:04:08 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab
