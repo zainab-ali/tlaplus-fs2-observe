@@ -5,13 +5,13 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="92"/>
+    <intAttribute key="fpIndex" value="19"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value=""/>
     <stringAttribute key="modelBehaviorNext" value=""/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="upstreamPendingN, enqueuedN, takeN_, pc, queueContents, el_, el, streams, takeN, upstreamN, upstreamEls"/>
+    <stringAttribute key="modelBehaviorVars" value="observerTakeN, enqueuedN, takeN_, pc, queueContents, el_, el, downstreamTakeN, streams, takeN, upstreamN, upstreamEls, upstreamPending"/>
     <stringAttribute key="modelComments" value=""/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
@@ -22,8 +22,21 @@
         <listEntry value="0Termination"/>
     </listAttribute>
     <intAttribute key="modelEditorOpenTabs" value="8"/>
-    <stringAttribute key="modelExpressionEval" value="LET n == [ enqueue |-&gt; [foo |-&gt; 1], dequeue |-&gt; TRUE]&#10;IN n[&quot;enqueue&quot;].foo"/>
-    <listAttribute key="modelParameterConstants"/>
+    <stringAttribute key="modelExpressionEval" value="LET UPSTREAM_ERROR == 2&#10;    UPSTREAM_NN == 3&#10;    x == [ n \in 1..UPSTREAM_NN |-&gt; IF n = 2 THEN 0 ELSE 1]&#10;IN x"/>
+    <listAttribute key="modelParameterConstants">
+        <listEntry value="UPSTREAM_N;;3;0;0"/>
+        <listEntry value="DOWNSTREAM_TAKE_N;;3;0;0"/>
+        <listEntry value="OBSERVER_TAKE_N;;3;0;0"/>
+        <listEntry value="NULL;;NULL;1;0"/>
+        <listEntry value="Q_STATES;;{running, completed, cancelled, errored};1;0"/>
+        <listEntry value="QStateRunning;;running;0;0"/>
+        <listEntry value="QStateErrored;;errored;0;0"/>
+        <listEntry value="QStateCompleted;;completed;0;0"/>
+        <listEntry value="QStateCancelled;;cancelled;0;0"/>
+        <listEntry value="NONE;;NONE;1;0"/>
+        <listEntry value="ERROR;;ERROR;1;0"/>
+        <listEntry value="UPSTREAM_ERROR_N;;2;0;0"/>
+    </listAttribute>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="4"/>
     <stringAttribute key="result.mail.address" value=""/>
