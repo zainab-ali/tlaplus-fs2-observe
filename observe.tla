@@ -25,27 +25,44 @@ If pipeTotal is >= upstreamTotal then the right stream may be cancelled.
 \* Redeclare the symbols from ObserveSpec
 CONSTANTS Streams, PIn, POut, PObs
 CONSTANTS States, SRunning, SErrored, SCancelled, SSucceeded
-VARIABLES streams
-INSTANCE ObserveSpec
 
 (* --algorithm hello_world
-variable s \in {"Hello", "World!"};
+variable streams = [
+ PIn |-> [
+   state |-> SRunning,
+   sent |-> <<>>
+ ],
+ POut |-> [
+   state |-> SRunning,
+   nRequested |-> 0
+ ] 
+];
 begin
   A: 
-    s := "";
+    \*streams.POut.nRequested := 1 ||
+    streams.PIn.sent := <<1>>;
 end algorithm;
 *)
-\* BEGIN TRANSLATION (chksum(pcal) = "c711c0af" /\ chksum(tla) = "61a234c6")
-VARIABLES s, pc
+\* BEGIN TRANSLATION (chksum(pcal) = "af74177a" /\ chksum(tla) = "aed4c27b")
+VARIABLES streams, pc
 
-vars == << s, pc >>
+vars == << streams, pc >>
 
 Init == (* Global variables *)
-        /\ s \in {"Hello", "World!"}
+        /\ streams =                    [
+                      PIn |-> [
+                        state |-> SRunning,
+                        sent |-> <<>>
+                      ],
+                      POut |-> [
+                        state |-> SRunning,
+                        nRequested |-> 0
+                      ]
+                     ]
         /\ pc = "A"
 
 A == /\ pc = "A"
-     /\ s' = ""
+     /\ streams' = [streams EXCEPT !.PIn.sent = <<1>>]
      /\ pc' = "Done"
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
@@ -60,7 +77,9 @@ Termination == <>(pc = "Done")
 
 \* END TRANSLATION 
 
+INSTANCE ObserveSpec
+
 =============================================================================
 \* Modification History
-\* Last modified Fri Jan 07 15:00:14 GMT 2022 by zainab
+\* Last modified Fri Jan 07 15:27:10 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab

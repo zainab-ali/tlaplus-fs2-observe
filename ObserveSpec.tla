@@ -19,7 +19,7 @@ VARIABLES streams
 
 \* No more elements are pulled from the input than are requested by the output
 InSendsOnlyElementsThanOutRequests ==
-  Len(streams[PIn].sent) <= streams[POut].nRequested
+  Len(streams.PIn.sent) <= streams.POut.nRequested
 
 \* No more elements are pulled from the input than are requested by the observer
 InSendsOnlyElementsThanObsRequests ==
@@ -80,5 +80,5 @@ OuIsCancelledThenObserverEventuallyTerminatesWithCancel ==
 
 =============================================================================
 \* Modification History
-\* Last modified Fri Jan 07 15:00:02 GMT 2022 by zainab
+\* Last modified Fri Jan 07 15:21:55 GMT 2022 by zainab
 \* Created Fri Jan 07 10:51:41 GMT 2022 by zainab
