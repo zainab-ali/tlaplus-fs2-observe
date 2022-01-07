@@ -8,10 +8,10 @@
 EXTENDS Integers, Sequences
 
 \* There are three parts to the system: the input stream, the output stream and the observer
-CONSTANTS Streams, P_in, P_out, P_obs
+CONSTANTS Streams, PIn, POut, PObs
 
 \* Each stream can be in several states
-CONSTANTS States, S_Running, S_Errored, S_Cancelled, S_Succeeded
+CONSTANTS States, SRunning, SErrored, SCancelled, SSucceeded
 
 VARIABLES streams
 
@@ -19,66 +19,66 @@ VARIABLES streams
 
 \* No more elements are pulled from the input than are requested by the output
 InSendsOnlyElementsThanOutRequests ==
-  Len(streams[P_in].sent) <= streams[P_out].nRequested
+  Len(streams[PIn].sent) <= streams[POut].nRequested
 
 \* No more elements are pulled from the input than are requested by the observer
 InSendsOnlyElementsThanObsRequests ==
-  Len(streams[P_in].sent) <= streams[P_obs].nRequested
+  Len(streams[PIn].sent) <= streams[PObs].nRequested
 
 \* The number of elements pulled from the input is at most one greater than the number of elements requested by the output
 InSendsAtMostOneMoreThanOutReceives ==
-  Len(streams[P_in].sent) <= 1 + Len(streams[P_out].received)
+  Len(streams[PIn].sent) <= 1 + Len(streams[POut].received)
 
 \* If the output terminates successfully, then the elements pulled by it should be equal to those pulled from the input
 OutSucceedsThenOutElementsEqualsInElements ==
-  streams[P_out].state = S_Succeeded
-  => streams[P_out].received = streams[P_in].sent
+  streams[POut].state = SSucceeded
+  => streams[POut].received = streams[PIn].sent
 
 \* If the observer terminates successfully, then the elements it receives by it should be equal to those sent from the input
 ObserverSucceedsThenObserverElementsEqualsInElements ==
-  streams[P_obs].state = S_Succeeded
-  => streams[P_obs].received = streams[P_in].sent
+  streams[PObs].state = SSucceeded
+  => streams[PObs].received = streams[PIn].sent
 
 (* Temporal Properties *)
 
 \* If the input terminates then the output eventually terminates
-InTerminatesThenOutEventuallyTerminates == ~ streams[P_in].state = S_Running ~> ~ streams[P_out].state = S_Running
+InTerminatesThenOutEventuallyTerminates == ~ streams[PIn].state = SRunning ~> ~ streams[POut].state = SRunning
 
 \* If the input terminates then the observer eventually terminates
 InTerminatesThenObserverEventuallyTerminates ==
-  ~ streams[P_in].state = S_Running ~> ~ streams[P_obs].state = S_Running
+  ~ streams[PIn].state = SRunning ~> ~ streams[PObs].state = SRunning
 
 \* If the input terminates with an error then the output eventually terminates with an error
 InTerminatesWithErrorThenOutEventuallyTerminatesWithError ==
-  /\ streams[P_in].state = S_Errored
-  /\ streams[P_out].state = S_Running
-  ~> streams[P_out.state]  = S_Errored
+  /\ streams[PIn].state = SErrored
+  /\ streams[POut].state = SRunning
+  ~> streams[POut.state]  = SErrored
 
 \* If the observer terminates with an error then the output eventually terminates with an error
 ObserverTerminatesWithErrorThenOutEventuallyTerminatesWithError ==
-  /\ streams[P_obs].state = S_Errored
-  /\ streams[P_out].state = S_Running
-  ~> streams[P_out.state]  = S_Errored
+  /\ streams[PObs].state = SErrored
+  /\ streams[POut].state = SRunning
+  ~> streams[POut.state]  = SErrored
 
 \* If the output has succeeded, but the observer is still requesting elements, then the observer should be cancelled.
 ObserverRequestsMoreElementsThanOutThenObserverEventuallyTerimnatesWithCancel ==
-  /\ streams[P_out].state = S_Succeeded
-  /\ streams[P_obs].nRequested > streams[P_out].nRequested
-  ~> streams[P_obs].state = S_Cancelled
+  /\ streams[POut].state = SSucceeded
+  /\ streams[PObs].nRequested > streams[POut].nRequested
+  ~> streams[PObs].state = SCancelled
 
 \* If the observer is cancelled then the output should also be cancelled.
 ObserverIsCancelledThenOutputEventuallyTerminatesWithCancel ==
-  /\ streams[P_obs].state = S_Cancelled
-  /\ streams[P_out].state = S_Running
-  ~> streams[P_out].state = S_Cancelled
+  /\ streams[PObs].state = SCancelled
+  /\ streams[POut].state = SRunning
+  ~> streams[POut].state = SCancelled
 
 \* If the output is cancelled then the observer should also be cancelled.
 OuIsCancelledThenObserverEventuallyTerminatesWithCancel ==
-  /\ streams[P_out].state = S_Cancelled
-  /\ streams[P_obs].state = S_Running
-  ~> streams[P_obs].state = S_Cancelled
+  /\ streams[POut].state = SCancelled
+  /\ streams[PObs].state = SRunning
+  ~> streams[PObs].state = SCancelled
 
 =============================================================================
 \* Modification History
-\* Last modified Fri Jan 07 14:37:10 GMT 2022 by zainab
+\* Last modified Fri Jan 07 15:00:02 GMT 2022 by zainab
 \* Created Fri Jan 07 10:51:41 GMT 2022 by zainab

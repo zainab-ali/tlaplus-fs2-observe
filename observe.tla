@@ -23,8 +23,8 @@ If pipeTotal is >= upstreamTotal then the right stream may be cancelled.
 *)
 
 \* Redeclare the symbols from ObserveSpec
-CONSTANTS Streams, P_in, P_out, P_obs
-CONSTANTS States, S_Running, S_Errored, S_Cancelled, S_Succeeded
+CONSTANTS Streams, PIn, POut, PObs
+CONSTANTS States, SRunning, SErrored, SCancelled, SSucceeded
 VARIABLES streams
 INSTANCE ObserveSpec
 
@@ -62,5 +62,5 @@ Termination == <>(pc = "Done")
 
 =============================================================================
 \* Modification History
-\* Last modified Fri Jan 07 14:41:02 GMT 2022 by zainab
+\* Last modified Fri Jan 07 15:00:14 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab
