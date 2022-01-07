@@ -16,6 +16,11 @@
 	</natures>
 	<linkedResources>
 		<link>
+			<name>ObserveSpec.tla</name>
+			<type>1</type>
+			<locationURI>PARENT-1-PROJECT_LOC/ObserveSpec.tla</locationURI>
+		</link>
+		<link>
 			<name>observe.tla</name>
 			<type>1</type>
 			<locationURI>PARENT-1-PROJECT_LOC/observe.tla</locationURI>
