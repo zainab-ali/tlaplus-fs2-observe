@@ -130,7 +130,7 @@ end macro;
 
 The downstream system is PObs. It requests an element by setting uncons to TRUE.
 *)
-process sinkOut = "sinkOut"
+fair process sinkOut = "sinkOut"
 begin
   SinkOutLoop:
   while streams.PIn.state = SRunning do
@@ -170,7 +170,7 @@ It also represents the right part of
         
 as it pulls on the runner stream.
 *)
-process runner = "runner"
+fair process runner = "runner"
 begin
   RunnerLoop:
   while ObserverRequiresElement do
@@ -205,7 +205,7 @@ It is pulled on by a downstream component.
 
 The cancellation checks could be improved
 *)
-process outStream = "outStream"
+fair process outStream = "outStream"
 variable local_el = 0;
 begin
 OutStreamLoop:
@@ -240,7 +240,7 @@ end process;
 (* This represents:
         val out = outStream.concurrently(runner)
 *)
-process concurrentlyLeft = "concurrentlyLeft"
+fair process concurrentlyLeft = "concurrentlyLeft"
 begin
 ConcurrentlyLeftLoop:
 while OutRequiresElement do
