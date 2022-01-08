@@ -36,7 +36,7 @@ EXTENDS Integers, Sequences
 Where:
  - PIn corresponds to self.chunks
  - POut corresponds to out
- - PObs corresponds to sinkOut.through(pipe)
+ - PObs corresponds to the result of sinkOut.through(pipe)
 
 The parameter `maxQueued` is fixed at 1 to test `observe` only, so excludes
 `observeAsync`.

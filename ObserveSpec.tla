@@ -63,6 +63,9 @@ ObserverTerminatesWithErrorThenOutEventuallyTerminatesWithError ==
   ~> streams.POut.state  = SErrored
 
 \* If the output has succeeded, but the observer is still requesting elements, then the observer should be cancelled.
+\* FIXME: The input could send at most one element, the observer could request two, and the output could request one.
+\*        In this case, the observer would complete. We want to catch the case where the input is configured to send 
+\*        more elements than the output receives. Perhaps this should be conditional?
 ObserverRequestsMoreElementsThanOutThenObserverEventuallyTerimnatesWithCancel ==
   /\ streams.POut.state = SSucceeded
   /\ streams.PObs.nRequested > streams.POut.nRequested
@@ -82,5 +85,5 @@ OuIsCancelledThenObserverEventuallyTerminatesWithCancel ==
 
 =============================================================================
 \* Modification History
-\* Last modified Fri Jan 07 15:21:55 GMT 2022 by zainab
+\* Last modified Sat Jan 08 21:57:30 GMT 2022 by zainab
 \* Created Fri Jan 07 10:51:41 GMT 2022 by zainab
