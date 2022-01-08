@@ -134,7 +134,6 @@ The downstream system is PObs. It requests an element by setting uncons to TRUE.
 process sinkOut = "sinkOut"
 begin
   SinkOutLoop:
-  \* TODO: Where do we set uncons?
   while streams.PIn.state = SRunning do
     SinkOutWaitForUncons: 
       await \/ Terminated(streams.PObs)
@@ -187,6 +186,11 @@ begin
         streams.PObs.state := SSucceeded;
       end if
   end while;
+  \* FIXME: This should be run after the SinkOut has finished its steps
+  \* As the code is, we're representing some incorrect interleavings of events
+  \* Pull.uncons(Pull.output(1) >> Pull.eval(print)) >> Pull.eval(unconsed)
+  \* What is the order of events above?
+  \* Would it be better to merge these into one process?
   RunnerOnFinalize:
     outChan.closed := TRUE;
 end process;
@@ -532,5 +536,5 @@ INSTANCE ObserveSpec
 
 =============================================================================
 \* Modification History
-\* Last modified Sat Jan 08 12:25:20 GMT 2022 by zainab
+\* Last modified Sat Jan 08 15:37:57 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab
