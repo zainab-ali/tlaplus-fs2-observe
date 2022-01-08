@@ -223,7 +223,7 @@ while streams.POut.state = SRunning do
           local_el := Head(outChan.contents);
           outChan.contents := Tail(outChan.contents);
         end if;
-      SinkOutOutput:
+      OutStreamOutput:
         if ~ Terminated(streams.POut) then
           streams.POut.received := Append(streams.POut.received, local_el);
     	end if;
