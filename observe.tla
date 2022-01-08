@@ -47,7 +47,6 @@ The input stream `self` is finite, capped at nTake.
 \* Redeclare the symbols from ObserveSpec
 CONSTANTS Streams, PIn, POut, PObs
 CONSTANTS States, SRunning, SErrored, SCancelled, SSucceeded
-\* CONSTANTS TerminationState, TError, TCancel, TSucceed
 
 CONSTANTS inNTakeRange, outNTakeRange, obsNTakeRange
 
