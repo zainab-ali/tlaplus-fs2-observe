@@ -50,6 +50,8 @@ CONSTANTS States, SRunning, SErrored, SCancelled, SSucceeded
 
 CONSTANTS inNTakeRange, outNTakeRange, obsNTakeRange
 
+CONSTANT synchronousObserver
+
 AppendHead(seq, els) == Append(seq, Head(els))
 
 Terminated(stream) == ~ stream.state = SRunning
@@ -108,7 +110,7 @@ macro acquire() begin
   if guard > 0 then
     guard := guard - 1;
   else 
-    await guard > 0;
+    await guard > 0 \/ Terminated(streams.PIn);
   end if;
 end macro;
 
@@ -133,71 +135,75 @@ The downstream system is PObs. It requests an element by setting uncons to TRUE.
 *)
 fair process sinkOut = "sinkOut"
 begin
-  SinkOutLoop:
-  while streams.PIn.state = SRunning do
-    SinkOutWaitForUncons: 
-      await \/ Terminated(streams.PObs)
-            \/ streams.PIn.uncons;
-    if Terminated(streams.PObs) then
-	  CleanUp:
-        streams.PIn.state := SSucceeded;
-    else
-       streams.PIn.uncons := FALSE;
-       \* Downstream is running and requested an element
-       if SinkOutHasElement then
-         SinkOutOutput:
-           streams.PObs.received := Append(streams.PObs.received, NextElement) ||
-           streams.PIn.sent := Append(streams.PIn.sent, NextElement) ||
-	   streams.PIn.pendingWork := TRUE;
-         SendToChannel:
-           if ~ outChan.closed then
-             outChan.contents := Append(outChan.contents, NextElement);
-           end if;
-         Guard:
-           acquire();
-	   streams.PIn.pendingWork := FALSE;
+  SinkOutOutput:
+  while streams.PIn.state = SRunning 
+        /\ streams.PObs.nRequested < streams.PObs.nTake
+        /\ SinkOutHasElement do
+    local_el := NextElement;    
+    streams.PObs.nRequested := streams.PObs.nRequested + 1 ||
+    streams.PObs.received := Append(streams.PObs.received, local_el) ||
+    streams.PIn.sent := Append(streams.PIn.sent, local_el) ||
+    streams.PIn.pendingWork := TRUE;
+    SendToChannel:
+      if Terminated(streams.PIn) then
+        goto End;
+      elsif ~ outChan.closed then
+        outChan.contents := Append(outChan.contents, NextElement);
+      end if;
+    Guard:
+      if Terminated(streams.PIn) then
+        goto End;
+      else
+        acquire();
+      end if;
+  end while;
+  Complete:
+    if /\ streams.PIn.state = SRunning 
+       /\ ~ SinkOutHasElement
+         \/ ~ streams.PObs.nRequested < streams.PObs.nTake then
+       \* We have sent all elements we can
+       if synchronousObserver /\ ~Terminated(streams.PObs.state) then
+         \* If the observer has not finished, and the observer is synchronous,
+         \* then terminating the in stream must also terminate the observer.
+         streams.PIn.state := SSucceeded || streams.PObs.state := SSucceeded;
        else
-         \* There are no more elements to output
-         OutputDone:
-           streams.PIn.state := SSucceeded;
+         streams.PIn.state := SSucceeded;
        end if;
     end if;
-  end while;
+   SinkOutOnFinalize:
+     streams.PIn.pendingWork := FALSE;
 end process;
 
 (* This represents runner in 
         val runner =
           sinkOut.through(pipe).onFinalize(outChan.close.void)
-It also represents the right part of
+      ...
         .concurrently(runner)
         
-as it pulls on the runner stream.
+The pipe may do anything with the sinkOut stream.
 
-For simple observers, the runner in the fs2 implementation is directly tied
-to the input stream. However, observers could potentially run the input
-stream concurrently to themselves.
+We model the observer as synchronous, meaning it terminates when the sinkOut stream terminates,
+or as asynchronous, meaning it could terminate at some point after the sinkOut stream.
 
 We assume that the observer will be well-behaved in that it won't leak
 resources - it won't start the input stream in a separate fiber and forget
 about it.
 
-We run the observer in a separate process in order to represent this.
+We run the observer in a separate process in order to represent independent asynchronous termination.
 *)
 fair process runner = "runner"
 begin
-  RunnerLoop:
-  while ObserverRequiresElement do
-    RunnerMakeUncons:
-      streams.PObs.nRequested := streams.PObs.nRequested + 1 ||
-      streams.PIn.uncons := TRUE;
-    RunnerWaitForElement:
-      await    Len(streams.PObs.received) = streams.PObs.nRequested
-            \/ ~ streams.PObs.state = SRunning
-            \/ ~ streams.PIn.state = SRunning;
-      if streams.PIn.state = SSucceeded /\ streams.PObs.state = SRunning then
-        streams.PObs.state := SSucceeded;
-      end if
-  end while;
+  RunnerComplete:
+  await    synchronousObserver
+        \/ Terminated(streams.PObs)
+        \/ Terminated(streams.PIn);
+  if ~ Terminated(streams.PObs) then
+    streams.PObs.state := SSucceeded;
+  elsif    ~ synchronousObserver 
+          /\ streams.PObs.state = SCancelled 
+          /\ streams.PIn.state = SRunning then
+    streams.PIn.state := SCancelled;
+  end if;
   RunnerOnFinalize:
     await ~ streams.PIn.pendingWork; \* Wait for the in stream to terminate
     outChan.closed := TRUE;
@@ -265,8 +271,14 @@ ConcurrentlyLeftOnFinalize:
   if streams.PObs.state = SErrored then
     streams.POut.state := SErrored;
   elsif streams.PObs.state = SRunning then
-    streams.PObs.state := SCancelled ||
-    streams.POut.state := SSucceeded;
+    if synchronousObserver then
+        streams.PObs.state := SCancelled ||
+        streams.PIn.state := SCancelled ||
+        streams.POut.state := SSucceeded;
+    else
+        streams.PObs.state := SCancelled ||
+        streams.POut.state := SSucceeded;
+    end if;
   else
     streams.POut.state := SSucceeded;
   end if;
