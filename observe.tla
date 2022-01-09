@@ -62,7 +62,8 @@ streams = [
  PIn |-> [
    state |-> SRunning,
    sent |-> <<>>,
-   uncons |-> FALSE,        \* Whether the downstream system has requested an element
+   uncons |-> FALSE,           \* Whether the downstream system has requested an element
+   pendingWork |-> FALSE,      \* Whether the in stream has work to do before the observer stream can finalize
    nTake |-> inNTake           \* The maximum number of elements to send
    \* termination |-> TSucceed \* The state we intend the stream to terminate in, should all its elements be requested.
  ],
@@ -146,13 +147,15 @@ begin
        if SinkOutHasElement then
          SinkOutOutput:
            streams.PObs.received := Append(streams.PObs.received, NextElement) ||
-           streams.PIn.sent := Append(streams.PIn.sent, NextElement);
+           streams.PIn.sent := Append(streams.PIn.sent, NextElement) ||
+	   streams.PIn.pendingWork := TRUE;
          SendToChannel:
            if ~ outChan.closed then
              outChan.contents := Append(outChan.contents, NextElement);
            end if;
          Guard:
            acquire();
+	   streams.PIn.pendingWork := FALSE;
        else
          \* There are no more elements to output
          OutputDone:
@@ -169,6 +172,16 @@ It also represents the right part of
         .concurrently(runner)
         
 as it pulls on the runner stream.
+
+For simple observers, the runner in the fs2 implementation is directly tied
+to the input stream. However, observers could potentially run the input
+stream concurrently to themselves.
+
+We assume that the observer will be well-behaved in that it won't leak
+resources - it won't start the input stream in a separate fiber and forget
+about it.
+
+We run the observer in a separate process in order to represent this.
 *)
 fair process runner = "runner"
 begin
@@ -185,12 +198,8 @@ begin
         streams.PObs.state := SSucceeded;
       end if
   end while;
-  \* FIXME: This should be run after the SinkOut has finished its steps
-  \* As the code is, we're representing some incorrect interleavings of events
-  \* Pull.uncons(Pull.output(1) >> Pull.eval(print)) >> Pull.eval(unconsed)
-  \* What is the order of events above?
-  \* Would it be better to merge these into one process?
   RunnerOnFinalize:
+    await ~ streams.PIn.pendingWork; \* Wait for the in stream to terminate
     outChan.closed := TRUE;
 end process;
 
