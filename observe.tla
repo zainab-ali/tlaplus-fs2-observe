@@ -248,8 +248,11 @@ if streams.POut.state = SRunning /\ ~ OutRequiresElement then
 end if;
 
 \* At this point, the POut stream must have terminated.
-ConcurrentlyLeftOnFinalize:
+OutOnFinalize:
   if streams.PObs.state = SRunning then
+  \* TODO: The observer is in a state that is interrupted but not yet cancelled.
+  \* An interruption flag has been set, but the observer may yet still do work.
+  \* We should model this before we model errors.
     if synchronousObserver then
         streams.PObs.state := SCancelled ||
         streams.PIn.state := SCancelled;
