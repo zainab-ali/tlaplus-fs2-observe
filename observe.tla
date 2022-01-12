@@ -87,9 +87,7 @@ guard = 0,
 outChan = [
   closed |-> FALSE,
   contents |-> <<>>
-],
-outStreamUncons = FALSE \* Whether the output stream has requested an element from outStream
-;
+];
 
 define
 PInDownstream == streams.PObs
@@ -162,7 +160,7 @@ begin
        /\ ~ SinkOutHasElement
          \/ ~ streams.PObs.nRequested < streams.PObs.nTake then
        \* We have sent all elements we can
-       if synchronousObserver /\ ~Terminated(streams.PObs.state) then
+       if synchronousObserver /\ ~Terminated(streams.PObs) then
          \* If the observer has not finished, and the observer is synchronous,
          \* then terminating the in stream must also terminate the observer.
          streams.PIn.state := SSucceeded || streams.PObs.state := SSucceeded;
@@ -216,73 +214,55 @@ end process;
               Stream.chunk(chunk).onFinalize(guard.release)
             }
             
+    val out = outStream.concurrently(runner)
+    
 It is pulled on by a downstream component.
-
-The cancellation checks could be improved
 *)
 fair process outStream = "outStream"
 variable local_el = 0;
 begin
 OutStreamLoop:
-while streams.POut.state = SRunning do
-  OutStreamWaitForUncons:
-    await \/ ~ streams.POut.state = SRunning
-          \/ outStreamUncons;
-  if streams.POut.state = SRunning then
+while streams.POut.state = SRunning /\ OutRequiresElement do
+  streams.POut.nRequested := streams.POut.nRequested + 1;
+  PopFromChannel:
     await    outChan.closed 
           \/ Len(outChan.contents) > 0 
           \/ ~ streams.POut.state = SRunning;
-    if Len(outChan.contents) > 0 then
-      PopFromChannel:
-        if ~ Terminated(streams.POut) then
-          local_el := Head(outChan.contents);
-          outChan.contents := Tail(outChan.contents);
-        end if;
+    if Len(outChan.contents) > 0 /\ ~ Terminated(streams.POut) then
+      local_el := Head(outChan.contents);
+      outChan.contents := Tail(outChan.contents);
       OutStreamOutput:
         if ~ Terminated(streams.POut) then
           streams.POut.received := Append(streams.POut.received, local_el);
-    	end if;
+        end if;
       ReleaseGuard:
         release();
     elsif streams.POut.state = SRunning /\ outChan.closed then
         \* The output channel is closed. We must close the downstream output stream
         streams.POut.state := SSucceeded;
     end if;
-  end if;
 end while;
+
+if streams.POut.state = SRunning /\ ~ OutRequiresElement then
+  streams.POut.state := SSucceeded;
+end if;
+
+\* At this point, the POut stream must have terminated.
+ConcurrentlyLeftOnFinalize:
+  if streams.PObs.state = SRunning then
+    if synchronousObserver then
+        streams.PObs.state := SCancelled ||
+        streams.PIn.state := SCancelled;
+    else
+        streams.PObs.state := SCancelled;
+    end if;
+  end if;
+  \* TODO: If the observer stream has errored, then we should interrupt the output stream
 end process;
 
 (* This represents:
         val out = outStream.concurrently(runner)
 *)
-fair process concurrentlyLeft = "concurrentlyLeft"
-begin
-ConcurrentlyLeftLoop:
-while OutRequiresElement do
-ConcurrentlyLeftMakeUncons:
-  streams.POut.nRequested := streams.POut.nRequested + 1;
-  outStreamUncons := TRUE;
-ConcurrentlyLeftWaitForElement:
-  await    Len(streams.POut.received) = streams.POut.nRequested 
-        \/ Terminated(streams.POut);
-end while;
-ConcurrentlyLeftOnFinalize:
-  \* FIXME: If the observer stream has errored, then we should interrupt the output stream
-  if streams.PObs.state = SErrored then
-    streams.POut.state := SErrored;
-  elsif streams.PObs.state = SRunning then
-    if synchronousObserver then
-        streams.PObs.state := SCancelled ||
-        streams.PIn.state := SCancelled ||
-        streams.POut.state := SSucceeded;
-    else
-        streams.PObs.state := SCancelled ||
-        streams.POut.state := SSucceeded;
-    end if;
-  else
-    streams.POut.state := SSucceeded;
-  end if;
-end process;
 end algorithm;
 
 *)
