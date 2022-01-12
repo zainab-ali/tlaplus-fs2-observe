@@ -5,13 +5,13 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="42"/>
+    <intAttribute key="fpIndex" value="29"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
-    <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="inNTake, local_el, obsNTake, pc, outNTake, streams, outStreamUncons, guard, outChan, local_el_"/>
+    <intAttribute key="modelBehaviorSpecType" value="0"/>
+    <stringAttribute key="modelBehaviorVars" value="inNTake, local_el, obsNTake, pc, outNTake, streams, synchronousObserver, guard, outChan"/>
     <stringAttribute key="modelComments" value=""/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
@@ -24,8 +24,9 @@
     <listAttribute key="modelCorrectnessProperties">
         <listEntry value="0Termination"/>
     </listAttribute>
-    <intAttribute key="modelEditorOpenTabs" value="8"/>
-    <stringAttribute key="modelExpressionEval" value=""/>
+    <intAttribute key="modelEditorOpenTabs" value="10"/>
+    <stringAttribute key="modelExpressionEval" value="BOOLEAN"/>
+    <stringAttribute key="modelParameterActionConstraint" value=""/>
     <listAttribute key="modelParameterConstants">
         <listEntry value="States;;{S_Running, S_Succeeded, S_Cancelled, S_Errored};1;0"/>
         <listEntry value="Streams;;{P_In, P_Out, P_Obs};1;0"/>
@@ -39,7 +40,12 @@
         <listEntry value="inNTakeRange;;0..3;0;0"/>
         <listEntry value="obsNTakeRange;;0..3;0;0"/>
         <listEntry value="outNTakeRange;;1..3;0;0"/>
+        <listEntry value="synchronousObserverRange;;BOOLEAN;0;0"/>
     </listAttribute>
+    <stringAttribute key="modelParameterContraint" value=""/>
+    <listAttribute key="modelParameterDefinitions"/>
+    <stringAttribute key="modelParameterModelValues" value="{}"/>
+    <stringAttribute key="modelParameterNewDefinitions" value=""/>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="4"/>
     <stringAttribute key="result.mail.address" value=""/>

@@ -5,13 +5,13 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="0"/>
+    <intAttribute key="fpIndex" value="21"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="inNTake, local_el, obsNTake, pc, outNTake, streams, outStreamUncons, guard, outChan"/>
+    <stringAttribute key="modelBehaviorVars" value="inNTake, local_el, obsNTake, pc, outNTake, streams, synchronousObserver, guard, outChan"/>
     <stringAttribute key="modelComments" value="All streams are empty - the input contains no elements, the output requests no elements, and the observer requests no elements."/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
@@ -35,6 +35,7 @@
         <listEntry value="inNTakeRange;;{0};0;0"/>
         <listEntry value="obsNTakeRange;;{0};0;0"/>
         <listEntry value="outNTakeRange;;{0};0;0"/>
+        <listEntry value="synchronousObserverRange;;BOOLEAN;0;0"/>
     </listAttribute>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="4"/>

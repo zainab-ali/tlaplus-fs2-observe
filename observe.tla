@@ -50,14 +50,15 @@ CONSTANTS States, SRunning, SErrored, SCancelled, SSucceeded
 
 CONSTANTS inNTakeRange, outNTakeRange, obsNTakeRange
 
-CONSTANT synchronousObserver
+CONSTANT synchronousObserverRange
 
 AppendHead(seq, els) == Append(seq, Head(els))
 
 Terminated(stream) == ~ stream.state = SRunning
 
 (* --algorithm observe
-variable inNTake \in inNTakeRange,
+variable synchronousObserver \in synchronousObserverRange,
+         inNTake \in inNTakeRange,
          outNTake \in outNTakeRange,
          obsNTake \in obsNTakeRange,
 streams = [
