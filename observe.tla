@@ -132,9 +132,9 @@ end macro;
 
 The downstream system is PObs. It requests an element by setting uncons to TRUE.
 *)
-fair process sinkOut = "sinkOut"
+fair process in = "in"
 begin
-  SinkOutOutput:
+  InOutput:
   while streams.PIn.state = SRunning 
         /\ streams.PObs.nRequested < streams.PObs.nTake
         /\ SinkOutHasElement do
@@ -143,20 +143,20 @@ begin
     streams.PObs.received := Append(streams.PObs.received, local_el) ||
     streams.PIn.sent := Append(streams.PIn.sent, local_el) ||
     streams.PIn.pendingWork := TRUE;
-    SendToChannel:
+    InSendToChannel:
       if Terminated(streams.PIn) then
-        goto SinkOutOnFinalize;
+        goto InOnFinalize;
       elsif ~ outChan.closed then
         outChan.contents := Append(outChan.contents, NextElement);
       end if;
-    Guard:
+    InAcquireGuard:
       if Terminated(streams.PIn) then
-        goto SinkOutOnFinalize;
+        goto InOnFinalize;
       else
         acquire();
       end if;
   end while;
-  Complete:
+  InComplete:
     if /\ streams.PIn.state = SRunning 
        /\ ~ SinkOutHasElement
          \/ ~ streams.PObs.nRequested < streams.PObs.nTake then
@@ -169,7 +169,7 @@ begin
          streams.PIn.state := SSucceeded;
        end if;
     end if;
-   SinkOutOnFinalize:
+   InOnFinalize:
      streams.PIn.pendingWork := FALSE;
 end process;
 
@@ -190,20 +190,20 @@ about it.
 
 We run the observer in a separate process in order to represent independent asynchronous termination.
 *)
-fair process runner = "runner"
+fair process observer = "observer"
 begin
-  RunnerComplete:
+  ObserverComplete:
   await    synchronousObserver
         \/ Terminated(streams.PObs)
         \/ Terminated(streams.PIn);
-  if ~ Terminated(streams.PObs) then
+  if ~ synchronousObserver /\ ~ Terminated(streams.PObs) then
     streams.PObs.state := SSucceeded;
   elsif    ~ synchronousObserver 
           /\ streams.PObs.state = SCancelled 
           /\ streams.PIn.state = SRunning then
     streams.PIn.state := SCancelled;
   end if;
-  RunnerOnFinalize:
+  ObserverOnFinalize:
     await ~ streams.PIn.pendingWork; \* Wait for the in stream to terminate
     outChan.closed := TRUE;
 end process;
@@ -219,27 +219,27 @@ end process;
     
 It is pulled on by a downstream component.
 *)
-fair process outStream = "outStream"
+fair process out = "out"
 variable local_el = 0;
 begin
-OutStreamLoop:
+OutPopFromChannel:
 while streams.POut.state = SRunning /\ OutRequiresElement do
-  streams.POut.nRequested := streams.POut.nRequested + 1;
-  PopFromChannel:
     await    outChan.closed 
           \/ Len(outChan.contents) > 0 
           \/ ~ streams.POut.state = SRunning;
     if Len(outChan.contents) > 0 /\ ~ Terminated(streams.POut) then
+      streams.POut.nRequested := streams.POut.nRequested + 1;
       local_el := Head(outChan.contents);
       outChan.contents := Tail(outChan.contents);
-      OutStreamOutput:
+      OutOutput:
         if ~ Terminated(streams.POut) then
           streams.POut.received := Append(streams.POut.received, local_el);
         end if;
-      ReleaseGuard:
+      OutReleaseGuard:
         release();
     elsif streams.POut.state = SRunning /\ outChan.closed then
         \* The output channel is closed. We must close the downstream output stream
+        streams.POut.nRequested := streams.POut.nRequested + 1 ||
         streams.POut.state := SSucceeded;
     end if;
 end while;
