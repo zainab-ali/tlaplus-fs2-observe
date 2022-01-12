@@ -146,13 +146,13 @@ begin
     streams.PIn.pendingWork := TRUE;
     SendToChannel:
       if Terminated(streams.PIn) then
-        goto End;
+        goto SinkOutOnFinalize;
       elsif ~ outChan.closed then
         outChan.contents := Append(outChan.contents, NextElement);
       end if;
     Guard:
       if Terminated(streams.PIn) then
-        goto End;
+        goto SinkOutOnFinalize;
       else
         acquire();
       end if;
