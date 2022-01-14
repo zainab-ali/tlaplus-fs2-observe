@@ -5,7 +5,7 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="13"/>
+    <intAttribute key="fpIndex" value="110"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
@@ -36,7 +36,16 @@
         <listEntry value="inNTakeRange;;{1};0;0"/>
         <listEntry value="obsNTakeRange;;{1};0;0"/>
         <listEntry value="outNTakeRange;;{0};0;0"/>
-        <listEntry value="synchronousObserverRange;;{TRUE};0;0"/>
+        <listEntry value="observerHandlesErrorRange;;BOOLEAN;0;0"/>
+        <listEntry value="ONone;;O_None;0;0"/>
+        <listEntry value="ObserverScopes;;{O_Parent, O_None, O_Transient};1;0"/>
+        <listEntry value="OParent;;O_Parent;0;0"/>
+        <listEntry value="observerScopeRange;;{OParent, ONone, OTransient};0;0"/>
+        <listEntry value="TError;;T_Error;0;0"/>
+        <listEntry value="OTransient;;O_Transient;0;0"/>
+        <listEntry value="TerminationStates;;{T_Error, T_Cancel, T_Success};1;0"/>
+        <listEntry value="TCancel;;T_Cancel;0;0"/>
+        <listEntry value="TSuccess;;T_Success;0;0"/>
     </listAttribute>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="4"/>
