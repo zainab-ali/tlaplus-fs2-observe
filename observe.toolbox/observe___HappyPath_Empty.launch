@@ -5,13 +5,13 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="129"/>
+    <intAttribute key="fpIndex" value="104"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="inNTake, local_el, obsNTake, pc, observerScope, outNTake, streams, guard, outChan, observerHandlesError"/>
+    <stringAttribute key="modelBehaviorVars" value="inNTake, local_el, obsNTake, pc, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
     <stringAttribute key="modelComments" value="All streams are empty - the input contains no elements, the output requests no elements, and the observer requests no elements."/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
@@ -45,6 +45,7 @@
         <listEntry value="TerminationStates;;{T_Error, T_Cancel, T_Success};1;0"/>
         <listEntry value="TCancel;;T_Cancel;0;0"/>
         <listEntry value="TSuccess;;T_Success;0;0"/>
+        <listEntry value="inTerminationRange;;{TSuccess, TError, TCancel};0;0"/>
     </listAttribute>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="4"/>

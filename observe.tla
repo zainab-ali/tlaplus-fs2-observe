@@ -53,6 +53,7 @@ CONSTANTS inNTakeRange, outNTakeRange, obsNTakeRange
 
 CONSTANT observerScopeRange
 CONSTANT observerHandlesErrorRange
+CONSTANT inTerminationRange
 
 AppendHead(seq, els) == Append(seq, Head(els))
 
@@ -64,14 +65,15 @@ variable observerScope \in observerScopeRange,
 	 inNTake \in inNTakeRange,
 	 outNTake \in outNTakeRange,
 	 obsNTake \in obsNTakeRange,
+	 inTermination \in inTerminationRange,
 streams = [
  PIn |-> [
    state |-> SRunning,
    sent |-> <<>>,
    uncons |-> FALSE,           \* Whether the downstream system has requested an element
-   pendingWork |-> FALSE,      \* Whether the in stream has work to do before the observer stream can finalize
+   pendingWork |-> TRUE,      \* Whether the in stream has work to do before the observer stream can finalize
    nTake |-> inNTake,          \* The maximum number of elements to send
-   termination |-> TSuccess    \* The state we intend the stream to terminate in, should all its elements be requested.
+   termination |-> inTermination    \* The state we intend the stream to terminate in, should all its elements be requested.
  ],
  POut |-> [
    state |-> SRunning,
@@ -91,7 +93,8 @@ guard = 0,
 outChan = [
   closed |-> FALSE,
   contents |-> <<>>
-];
+],
+observerInterrupt = FALSE;
 
 define
 PInDownstream == streams.PObs
@@ -106,6 +109,8 @@ ObserverRequiresElement ==
 
 OutRequiresElement == streams.POut.nRequested < streams.POut.nTake
 
+InInterrupted ==
+  (observerScope = OParent \/ observerScope = OTransient) /\ observerInterrupt
 
 InEndState ==
   IF /\ ~ Terminated(streams.PIn)
@@ -115,22 +120,28 @@ InEndState ==
     CASE streams.PIn.termination = TError  -> SErrored
       [] streams.PIn.termination = TCancel -> SCancelled
       [] OTHER                             -> SSucceeded
+  ELSE IF /\ ~ Terminated(streams.PIn) /\ InInterrupted
+  THEN SCancelled
   ELSE SSucceeded
 
 InObserverEndState ==
   IF /\ ~ Terminated(streams.PIn)
      /\ ~ Terminated(streams.PObs)
-     /\ observerScope = OParent
-     /\ ~ SinkOutHasElement
-       \/ ~ streams.PObs.nRequested < streams.PObs.nTake
   THEN
+    IF /\ observerScope = OParent
+       /\ ~ SinkOutHasElement
+	 \/ ~ streams.PObs.nRequested < streams.PObs.nTake
+    THEN
       CASE streams.PIn.termination = TError  /\ ~ observerHandlesError  -> SErrored
 	[] streams.PIn.termination = TError  /\   observerHandlesError  -> SSucceeded
 	[] streams.PIn.termination = TCancel                            -> SCancelled
 	[] streams.PIn.termination = TSuccess                           -> SSucceeded
 	[] OTHER                                                        -> SSucceeded
-  ELSE
-    streams.PObs.state
+    ELSE
+      IF InInterrupted
+      THEN SCancelled
+      ELSE streams.PObs.state
+  ELSE streams.PObs.state
 
 ObserverEndState ==
   IF observerScope = OTransient
@@ -182,20 +193,23 @@ begin
   InOutput:
   while streams.PIn.state = SRunning
 	/\ streams.PObs.nRequested < streams.PObs.nTake
-	/\ SinkOutHasElement do
+	/\ SinkOutHasElement
+	/\ ~ InInterrupted do
     local_el := NextElement;
     streams.PObs.nRequested := streams.PObs.nRequested + 1 ||
     streams.PObs.received := Append(streams.PObs.received, local_el) ||
     streams.PIn.sent := Append(streams.PIn.sent, local_el) ||
     streams.PIn.pendingWork := TRUE;
     InSendToChannel:
-      if Terminated(streams.PIn) then
+      if \/ Terminated(streams.PIn)
+	 \/ InInterrupted then
 	goto InOnFinalize;
       elsif ~ outChan.closed then
 	outChan.contents := Append(outChan.contents, NextElement);
       end if;
     InAcquireGuard:
-      if Terminated(streams.PIn) then
+      if \/ Terminated(streams.PIn)
+	 \/ InInterrupted then
 	goto InOnFinalize;
       else
 	acquire();
@@ -232,15 +246,19 @@ begin
   \* If the scope is not a parent, it is transient or unrelated and must be handled here
   if ~ observerScope = OParent then
     await \/ Terminated(streams.PObs)
-	  \/ Terminated(streams.PIn);
+	  \/ Terminated(streams.PIn)
+	  \/ observerInterrupt;
   \* If the input stream has terminated, we assume that there is still work to be done by the observer
   \* The steps between the input termination and this step represents that work
-    if ~ Terminated(streams.PObs) /\ Terminated(streams.PIn) then
+    if ~ Terminated(streams.PObs) /\ ~ observerInterrupt /\ Terminated(streams.PIn) then
       streams.PObs.state := ObserverEndState;
-    elsif /\ streams.PObs.state = SCancelled
-	  /\ observerScope = ONone
-	  /\ streams.PIn.state = SRunning then
-      streams.PIn.state := SCancelled;
+    elsif /\ observerInterrupt
+	  /\ observerScope = ONone then
+      if streams.PIn.state = SRunning then
+	streams.PIn.state := SCancelled || streams.PObs.state := SCancelled;
+      else
+	streams.PObs.state := SCancelled;
+      end if;
     end if;
   end if;
 
@@ -262,14 +280,20 @@ end process;
 It is pulled on by a downstream component.
 *)
 fair process out = "out"
-variable local_el = 0;
+variable local_el = 0, local_running = TRUE;
 begin
 OutPopFromChannel:
-while streams.POut.state = SRunning /\ OutRequiresElement do
+while local_running /\ OutRequiresElement do
     await    outChan.closed
 	  \/ Len(outChan.contents) > 0
-	  \/ ~ streams.POut.state = SRunning;
-    if Len(outChan.contents) > 0 /\ ~ Terminated(streams.POut) then
+	  \/ ~ streams.POut.state = SRunning
+	  \/ streams.PObs.state = SErrored;
+    if streams.PObs.state = SErrored then
+      streams.POut.nRequested := streams.POut.nRequested + 1 ||
+      streams.POut.state := SErrored;
+      local_running := FALSE;
+    elsif Len(outChan.contents) > 0 /\ ~ Terminated(streams.POut) then
+    \* TODO: Handle errors in the observer
       streams.POut.nRequested := streams.POut.nRequested + 1;
       local_el := Head(outChan.contents);
       outChan.contents := Tail(outChan.contents);
@@ -281,31 +305,19 @@ while streams.POut.state = SRunning /\ OutRequiresElement do
 	release();
     elsif streams.POut.state = SRunning /\ outChan.closed then
 	\* The output channel is closed. We must close the downstream output stream
-	streams.POut.nRequested := streams.POut.nRequested + 1 ||
-	streams.POut.state := SSucceeded;
+	streams.POut.nRequested := streams.POut.nRequested + 1;
+	local_running := FALSE;
     end if;
 end while;
 
-if streams.POut.state = SRunning /\ ~ OutRequiresElement then
-  streams.POut.state := SSucceeded;
-end if;
-
-\* At this point, the POut stream must have terminated.
 OutOnFinalize:
-  if streams.PObs.state = SRunning then
-  \* TODO: The observer is in a state that is interrupted but not yet cancelled.
-  \* An interruption flag has been set, but the observer may yet still do work.
-  \* We should model this before we model errors.
-    if \/ observerScope = OParent
-       \/ observerScope = OParent
-	 \/ streams.PIn.state = SRunning then
-	streams.PObs.state := SCancelled ||
-	streams.PIn.state := SCancelled;
-    else
-	streams.PObs.state := SCancelled;
-    end if;
+  observerInterrupt := TRUE;
+  await ~ streams.PObs.state = SRunning;
+  if streams.PObs.state = SErrored then
+    streams.POut.state := SErrored;
+  else
+    streams.POut.state := SSucceeded;
   end if;
-  \* TODO: If the observer stream has errored, then we should interrupt the output stream
 end process;
 
 (* This represents:
