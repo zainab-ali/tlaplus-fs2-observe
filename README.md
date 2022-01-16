@@ -88,6 +88,8 @@ operations.
 
 # Iterating the code
 
+## A naive observe implementation
+
 A naive attempt at `observe` would be:
 
 ```scala
@@ -103,9 +105,11 @@ There are a few problems with this implementation:
 
 These can both be identified by TLA+.
 
-The next attempt should tackle the cancellation.
+## An observe implementation with cancellation
 
-```
+The following code ensures that the observer isn't cancelled:
+
+```scala
 upstream.evalMap(q.enqueue)
   .concurrently(q.dequeue.through(pipe))
   
@@ -115,6 +119,8 @@ q.dequeue
   upstream.evalTap(q.enqueue).through(pipe) ++ q.close
   )
 ```
+
+# Thoughts
 
 It would be worth writing some library code for:
  - the `q.dequeue` process
@@ -130,16 +136,6 @@ upstream.evalMap(q.enqueue)
   upstream.evalTap(sem.acquire >> q.enqueue).through(pipe) ++ q.close
   )
 ```
-
-enqTakeN = deqTakeN => enqRecEls = deqRecEls
-
-empty observer == empty output
-
-- If the observer raises an error, then that error should be propagated downstream
-- If the source raises an error, then that error should be propagated downstream
-- If any errors are raised, then the streams should terminate
-
-We should now model errors.
 
 # Properties of `observe`
 
@@ -179,7 +175,7 @@ group("handle finite observing sink") {
 ## The state
 
 In order to assert these properties, we need:
- - A state of `Completed`, `Cancelled`, `Running` and `Errorred` that can be applied to the `input`, `observe` and `output`
+ - A state of `Succeeded`, `Cancelled`, `Running` and `Errorred` that can be applied to the `input`, `observe` and `output`
  - The sequence of elements pulled from `input`
  - The number of elements requested by `output`
  - The number of elements requested by `observer`
@@ -189,8 +185,8 @@ In order to assert these properties, we need:
 We can represent this as
 
 ```
-state \E { S_running, S_completed, S_cancelled, S_errored }
-P \E { P observer, P_output, P_input }
+state \E { SRunning, SSucceeded, SCancelled, SErrored }
+P \E { PObserver, POutput, PInput }
 el \E {Nat}
 stream[P].nRequested \E <<el>>
 stream[P].received \E <<el>> \* Note that stream[P_input].received doesn't make any sense. We could use it to represent the set of elements to pull downstream.
@@ -209,8 +205,8 @@ We must also configure:
  - The element index at which the `output` should terminate with a cancellation, if any
 
 ```
-stream[P].NMaxRequests \E ({INF} \U Nat)
-stream[P].terimation = { T_Normal, T_Error, T_Cancel}
+stream[P].nTake \E ({INF} \U Nat)
+stream[P].terimation = { TNormal, TError, TCancel}
 ```
 
 This model is slightly more complex than we need to represent all of
@@ -222,30 +218,18 @@ Most of the invariants can be expressed, except for:
  - [ ] If `in` is finite, then `out` terminates
  - [ ] If the `in` is finite and the `observer` requests the same number of elements as the `out`, then the `out` and `observer` should both complete.
 
+# Thoughts on Assumptions
 
-TODO: Can we have a stream.take(0) ?
+The output must request at least one element for the system to run. This puts a lower bound of 1 on `out.nTake`.
 
-Is an error in self different to an error in observer?
+The observer scope may have any sort of relationship to the input scope. This makes error propagation and cancellation difficult to model, as these are dependent on the scope relationship. We will classify the relationship as one of:
+ - `OParent`, implying that the observer is a parent of the input. For example, `observer = _.take(3)`
+ - `OTransient`, implying that the observer is a parent of the input at some point in time. For example `observer = _ ++ other`
+ - `ONone`, implying that the input and observer scopes are unrelated. The input may run concurrently to the observer. We have to assume certain error propagation behaviours in this case.
+ 
+The observer may handle errors in the input with `handleErrorWith`, thus the observer termination state doesn't necessarily reflect the input termination state.
 
-in.onFinalize(x)
-.observe(observer)
-
-is different to in.observe(observer), but do we need to care?
-
-Does an in cancellation propagate downstream?
-Yes.
-
-There are a couple of cases to explore here:
- - the observer is unrelated to the input
- - the observer is a direct pull of the input
-
-It isn't possible to take(0), so the model should reflect this.
-
-Next steps:
- - try and design the previous runner to have a sequential mode
- - add an assume clause with an output minimum take of 1
-
-# Cancellation
+# Thoughts on cancellation
 
 Cancellation is performed through an interrupt that is raced at each task.
  - How do interrupts work with concurrently? If we interrupt the output stream, how is the background cancelled?
@@ -262,6 +246,7 @@ When the observer stream terminates, via cancellation or otherwise, it may decid
  1. The effect that creates the `observe` system and starts it concurrently is only created if an element is pulled downstream. Thus, the `out` stream must pull at least one element.
  
 	If the system could be started without the output requesting an element then some invariants would be violated, notably the invariants that relate the elements pulled from the input to those received by the output.
+
  2. The `observer` pipe must clean up resources on the `in` stream. A well-behaved observer must not start the `in` stream in a fiber and forget to cancel it.
  
    This assumption affects the order of steps following `onFinalize(channel.close)`. The `in` stream cannot take steps after the channel has been closed.
@@ -326,22 +311,7 @@ The cases are
    => The `obs` stream needs to do work independently of the `in` stream. This can be as simple as checking its cancellation flag.
  - at each step in the sinkOut, check if the observer has been cancelled. If it has, then cancel the 
 
-Next steps:
- - define a mode for the observer to be:
-  - mapping ?
-  - simple?
-  - synchronous
-  
 If the observer is NOT synchronous then it may terminate gracefully at some step AFTER the input stream has terminated
-
-Step:
-if not synchronous
-  then wait for the observer to complete
-  then or for us to be cancelled succeed
-Step:
-  if we haven't been cancelled
-then if we
-  then mark ourselves as completed
 
 # Understanding scopes
 
