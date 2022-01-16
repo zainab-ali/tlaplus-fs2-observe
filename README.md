@@ -244,3 +244,130 @@ It isn't possible to take(0), so the model should reflect this.
 Next steps:
  - try and design the previous runner to have a sequential mode
  - add an assume clause with an output minimum take of 1
+
+# Cancellation
+
+Cancellation is performed through an interrupt that is raced at each task.
+ - How do interrupts work with concurrently? If we interrupt the output stream, how is the background cancelled?
+
+Cancellation occurs when a stream is started in a different fiber, and that fiber is cancelled.
+
+If the observer stream doesn't fork the input stream, then the input stream is cancelled exactly when the observer stream is cancelled.
+If the observer stream forks the input stream, then the observer stream may be cancelled, and may decide to cancel the input stream.
+
+When the observer stream terminates, via cancellation or otherwise, it may decide to cancel
+
+# Assumptions
+
+ 1. The effect that creates the `observe` system and starts it concurrently is only created if an element is pulled downstream. Thus, the `out` stream must pull at least one element.
+ 
+	If the system could be started without the output requesting an element then some invariants would be violated, notably the invariants that relate the elements pulled from the input to those received by the output.
+ 2. The `observer` pipe must clean up resources on the `in` stream. A well-behaved observer must not start the `in` stream in a fiber and forget to cancel it.
+ 
+   This assumption affects the order of steps following `onFinalize(channel.close)`. The `in` stream cannot take steps after the channel has been closed.
+
+ 3. The `observer` may run the `in` stream concurrently to itself. Elements may be pulled from the `in` stream independently of any work done in the observer. The `observer` may also cancel the `in` stream while it itself completes successfully.
+ 
+ If the `observer` stream is cancelled, then it must cancel the `in` stream. It does so before closing the channel with `onFinalize(channel.close)`.
+ 
+
+
+# Understanding Cancellation
+
+PlusCal introduces the idea of a process - a series of sequential steps. Processes run independently of each other, meaning that they can interleave their steps. 
+
+Streams are sequential by default, so a stream system should be modelled as a single process. This makes streams difficult to map to PlusCal code as their unit of composition doesn't map to a process.
+
+Nevertheless, it is not good practice to try and model them with processes than necessary as this can cause TLA to find behaviours that would be impossible in the real system. It also makes behaviour traces quite convoluted.
+
+Cancellation occurs when a stream is started in a different thread and its fiber is cancelled. We can model cancellation by setting the cancellation flag in one process and checking it in the process that does work.
+
+## Cancellation and errors in the observer
+
+The observer pipe is a function, and so could be anything. The following are all valid observer pipes:
+
+
+
+```scala
+identity
+```
+
+```scala
+_ => other
+```
+
+```scala
+in => other.concurrently(in)
+```
+
+```scala
+_ ++ other
+```
+
+The `observer` is the stream that is constructed by the observer pipe. is run in a different fiber using `concurrently`, so may be cancelled.
+ - For the identity observer, cancelling the observer is analagous to cancelling the input.
+ - The empty observer does not pull on the input whatsoever. Cancelling it has no effect on the input.
+   - Nothing is ever sent to the channel
+   - The channel is closed once the observer finishes
+   - The observer may still do work
+ - The concurrent observer is cancelled, and will cancel the input. The input's finalizers are run before the observer's finalizers.
+ - The concat observer has work to do after pulling on the in stream. When cancelled it may or may not cancel the observer.
+ 
+There are several cases:
+ - The in stream may complete before the observer is cancelled (as in `concat` and `concurrently`)
+   `observer = in ++ other`
+   => The `in` stream should transition to `done` independently of the observer
+ - The `in` stream may never do anything (as in `_ => other`). Mark it as complete 
+ - The `in` stream may depend on the observer. We can see this as the observer having no work, or not doing its work.
+ 
+The cases are
+ - the `in` stream and `obs` stream are cancelled in the same step
+ - the `obs` stream is cancelled first, then the `in` stream, such that the `in` stream may complete before the `obs` stream.
+   => The `obs` stream needs to do work independently of the `in` stream. This can be as simple as checking its cancellation flag.
+ - at each step in the sinkOut, check if the observer has been cancelled. If it has, then cancel the 
+
+Next steps:
+ - define a mode for the observer to be:
+  - mapping ?
+  - simple?
+  - synchronous
+  
+If the observer is NOT synchronous then it may terminate gracefully at some step AFTER the input stream has terminated
+
+Step:
+if not synchronous
+  then wait for the observer to complete
+  then or for us to be cancelled succeed
+Step:
+  if we haven't been cancelled
+then if we
+  then mark ourselves as completed
+
+# Understanding scopes
+
+The different kinds of input-observer relationships can be summarized by different scoping rules:
+ - No related scope, such as in `concurrently`
+ - A parent-child relation, such as in `.take`
+ - A transient parent-child relation, one that doesn't exist all the time, such as in `++`
+ 
+Additionally, scopes can affect how errors are handled.
+
+`handleErrorWith` creates a parent scope which succeeds when the child scope fails.
+
+```
+(Stream(1) ++ Stream.raiseError[IO](new Error())
+  .covaryOutput[Int])
+  .onFinalizeCase(c => IO.println(s"Finalized 1 with $c"))
+  .handleErrorWith(_ => Stream(2, 3))
+  .onFinalizeCase(c => IO.println(s"Finalized 2 with $c"))
+  .compile.drain
+```
+
+So the observer may have a `handleErrorWith`, and thus will succeed even if the input fails.
+
+The input is cancelled then linked parent scope is also cancelled.
+
+
+Next steps:
+ - Write up findings
+ - Try a version with ++ for the guard and channel closing.

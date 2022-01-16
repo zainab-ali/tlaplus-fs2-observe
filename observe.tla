@@ -1,35 +1,35 @@
 ------------------------------ MODULE observe ------------------------------
-EXTENDS Integers, Sequences
+EXTENDS Integers, Sequences, FiniteSets
 (* This TLA+ Spec verifies the reworked version of observe:
 
 ```
       for {
-        guard <- Semaphore[F](maxQueued - 1)
-        outChan <- Channel.unbounded[F, Chunk[O]]
+	guard <- Semaphore[F](maxQueued - 1)
+	outChan <- Channel.unbounded[F, Chunk[O]]
       } yield {
 
-        val sinkOut: Stream[F, O] = {
-          def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
-            s.pull.uncons1.flatMap {
-              case None => Pull.done
-              case Some((ch, rest)) =>
-                Pull.output(ch) >> Pull.eval(outChan.send(ch) >> guard.acquire) >> go(rest)
-            }
+	val sinkOut: Stream[F, O] = {
+	  def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
+	    s.pull.uncons1.flatMap {
+	      case None => Pull.done
+	      case Some((ch, rest)) =>
+		Pull.output(ch) >> Pull.eval(outChan.send(ch) >> guard.acquire) >> go(rest)
+	    }
 
-          go(self.chunks).stream
-        }
+	  go(self.chunks).stream
+	}
 
-        val runner =
-          sinkOut.through(pipe).onFinalize(outChan.close.void)
+	val runner =
+	  sinkOut.through(pipe).onFinalize(outChan.close.void)
 
-        def outStream =
-          outChan.stream
-            .flatMap { chunk =>
-              Stream.chunk(chunk).onFinalize(guard.release)
-            }
+	def outStream =
+	  outChan.stream
+	    .flatMap { chunk =>
+	      Stream.chunk(chunk).onFinalize(guard.release)
+	    }
 
-        val out = outStream.concurrently(runner)
-        out
+	val out = outStream.concurrently(runner)
+	out
       }
 ```
 
@@ -53,20 +53,38 @@ CONSTANTS inNTakeRange, outNTakeRange, obsNTakeRange
 
 CONSTANT observerScopeRange
 CONSTANT observerHandlesErrorRange
-CONSTANT inTerminationRange, obsTerminationRange
+CONSTANT inTerminationRange, obsTerminationRange, outTerminationRange
+
+NonEmpty(S) == ~ S = {}
+Minimum(S) == CHOOSE x \in S : \A y \in S : x <= y
+
+Naturals(S) == S \subseteq Nat
+
+ASSUME NonEmpty(inNTakeRange)  /\ Naturals(inNTakeRange)
+ASSUME NonEmpty(obsNTakeRange) /\ Naturals(obsNTakeRange)
+ASSUME NonEmpty(outNTakeRange) /\ Naturals(outNTakeRange)  /\ Minimum(outNTakeRange) > 0
+
+ASSUME NonEmpty(observerScopeRange) /\ observerScopeRange \subseteq ObserverScopes
+ASSUME NonEmpty(observerHandlesErrorRange) /\ observerHandlesErrorRange \subseteq BOOLEAN
+ASSUME NonEmpty(inTerminationRange) /\ inTerminationRange \subseteq TerminationStates
+ASSUME NonEmpty(obsTerminationRange) /\ obsTerminationRange \subseteq TerminationStates
+ASSUME NonEmpty(outTerminationRange) /\ outTerminationRange \subseteq {TSuccess, TCancel}
 
 AppendHead(seq, els) == Append(seq, Head(els))
 
 Terminated(stream) == ~ stream.state = SRunning
 
+
 (* --algorithm observe
 variable observerScope \in observerScopeRange,
-         observerHandlesError \in observerHandlesErrorRange,
-         inNTake \in inNTakeRange,
-         outNTake \in outNTakeRange,
-         obsNTake \in obsNTakeRange,
-         inTermination \in inTerminationRange,
-         obsTermination \in obsTerminationRange,
+	 observerHandlesError \in observerHandlesErrorRange,
+	 inNTake \in inNTakeRange,
+	 outNTake \in outNTakeRange,
+	 obsNTake \in obsNTakeRange,
+	 inTermination \in inTerminationRange,
+	 obsTermination \in obsTerminationRange,
+	 outTermination \in outTerminationRange,
+	     outInterrupted = FALSE,
 streams = [
  PIn |-> [
    state |-> SRunning,
@@ -115,14 +133,15 @@ ObsRequiresElement == streams.PObs.nRequested < streams.PObs.nTake
 
 InHasSentAllElements == ~ InHasElement
 ObsHasRequestedAllElements == ~ ObsRequiresElement
+ObsHasReceivedAllElements == streams.PObs.nRequested = Len(streams.PObs.received)
 
 InEndState ==
   IF /\ ~ Terminated(streams.PIn)
      /\ InHasSentAllElements
        \/ ObsHasRequestedAllElements
   THEN
-    CASE streams.PIn.termination = TError /\ ObsRequiresElement  -> SErrored
-      [] streams.PIn.termination = TCancel /\ ObsRequiresElement -> SCancelled
+    CASE streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements  -> SErrored
+      [] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements -> SCancelled
       [] OTHER                                                   -> SSucceeded
   ELSE IF /\ ~ Terminated(streams.PIn) /\ InInterrupted
   THEN SCancelled
@@ -134,13 +153,13 @@ InObserverEndState ==
   THEN
     IF /\ observerScope = OParent
        /\ InHasSentAllElements
-         \/ ObsHasRequestedAllElements
+	 \/ ObsHasRequestedAllElements
     THEN
-      CASE streams.PIn.termination = TError /\ ObsRequiresElement /\ ~ observerHandlesError  -> SErrored
-        [] streams.PIn.termination = TError /\ ObsRequiresElement /\   observerHandlesError  -> SSucceeded
-        [] streams.PIn.termination = TCancel /\ ObsRequiresElement                           -> SCancelled
-        [] streams.PIn.termination = TSuccess                                                -> SSucceeded
-        [] OTHER                                                                             -> SSucceeded
+      CASE streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\ ~ observerHandlesError  -> SErrored
+	[] streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\   observerHandlesError  -> SSucceeded
+	[] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements                           -> SCancelled
+	[] streams.PIn.termination = TSuccess                                                -> SSucceeded
+	[] OTHER                                                                             -> SSucceeded
     ELSE
       IF InInterrupted
       THEN SCancelled
@@ -168,6 +187,9 @@ ObserverEndState ==
       [] OTHER                                                  -> SSucceeded
       \* Cancellation does not affect the observer stream. TODO: We're assuming that the observer now completes its work. Model infinite observer streams.
   ELSE streams.PObs.state
+
+
+GuardIsNonNegative == guard >= 0
 end define;
 
 macro acquire() begin
@@ -184,23 +206,23 @@ end macro;
 
 (* This represents `sinkOut` in
 
-        val sinkOut: Stream[F, O] = {
-          def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
-            s.pull.uncons1.flatMap {
-              case None => Pull.done
-              case Some((ch, rest)) =>
-                Pull.output(ch) >> Pull.eval(outChan.send(ch) >> guard.acquire) >> go(rest)
-            }
+	val sinkOut: Stream[F, O] = {
+	  def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
+	    s.pull.uncons1.flatMap {
+	      case None => Pull.done
+	      case Some((ch, rest)) =>
+		Pull.output(ch) >> Pull.eval(outChan.send(ch) >> guard.acquire) >> go(rest)
+	    }
 
-          go(self.chunks).stream
-        }
+	  go(self.chunks).stream
+	}
 *)
 fair process in = "in"
 begin
   InOutput:
   while /\ ~ Terminated(streams.PIn)
-        /\ ~ InInterrupted
-        /\ ObsRequiresElement do
+	/\ ~ InInterrupted
+	/\ ObsRequiresElement do
     if ~ InHasElement then
       \* The observer has requested an element, but there are none to send.
       streams.PObs.nRequested := streams.PObs.nRequested + 1;
@@ -210,30 +232,30 @@ begin
       streams.PObs.nRequested := streams.PObs.nRequested + 1 ||
       streams.PObs.received := Append(streams.PObs.received, local_el) ||
       streams.PIn.sent := Append(streams.PIn.sent, local_el);
-      
+
       InSendToChannel:
-        if \/ Terminated(streams.PIn)
-           \/ InInterrupted then
-          goto InComplete;
-        elsif ~ outChan.closed then
-          outChan.contents := Append(outChan.contents, NextElement);
-        else
-          \* The output channel is closed. Keep sending elements to the observer,
-          \* but don't send them to the channel.
-          skip;
-        end if;
-      
+	if \/ Terminated(streams.PIn)
+	   \/ InInterrupted then
+	  goto InComplete;
+	elsif ~ outChan.closed then
+	  outChan.contents := Append(outChan.contents, local_el);
+	else
+	  \* The output channel is closed. Keep sending elements to the observer,
+	  \* but don't send them to the channel.
+	  skip;
+	end if;
+
       InAcquireGuard:
-        if /\ ~ Terminated(streams.PIn)
-           /\ ~ InInterrupted then
-          acquire();
-        else
-          \* The input has been terminated or interrupted 
-          skip;
-        end if;
+	if /\ ~ Terminated(streams.PIn)
+	   /\ ~ InInterrupted then
+	  acquire();
+	else
+	  \* The input has been terminated or interrupted
+	  skip;
+	end if;
       end if;
   end while;
-  
+
   InComplete:
     if streams.PIn.state = SRunning then
       streams.PIn.state := InEndState || streams.PObs.state := InObserverEndState;
@@ -241,16 +263,16 @@ begin
       \* The stream has been terminated by some other process.
       skip;
     end if;
-    
+
   InOnFinalize:
     streams.PIn.hasFinalized := TRUE;
 end process;
 
 (* This represents runner in
-        val runner =
-          sinkOut.through(pipe).onFinalize(outChan.close.void)
+	val runner =
+	  sinkOut.through(pipe).onFinalize(outChan.close.void)
       ...
-        .concurrently(runner)
+	.concurrently(runner)
 
 The pipe may do anything with the sinkOut stream.
 
@@ -269,8 +291,8 @@ begin
   \* If the scope is not a parent, it is transient or unrelated and must be handled here
   if ~ observerScope = OParent then
     await \/ Terminated(streams.PObs)
-          \/ Terminated(streams.PIn)
-          \/ observerInterrupt;
+	  \/ Terminated(streams.PIn)
+	  \/ observerInterrupt;
   \* If the input stream has terminated, we assume that there is still work to be done by the observer
   \* The steps between the input termination and this step represents that work
     if ~ Terminated(streams.PObs) /\ ~ observerInterrupt /\ Terminated(streams.PIn) then
@@ -279,9 +301,9 @@ begin
       streams.PObs.state := ObserverEndState;
     elsif /\ observerInterrupt /\ (observerScope = ONone \/ observerScope = OTransient) then
       if streams.PIn.state = SRunning then
-        streams.PIn.state := SCancelled || streams.PObs.state := SCancelled;
+	streams.PIn.state := SCancelled || streams.PObs.state := SCancelled;
       else
-        streams.PObs.state := SCancelled;
+	streams.PObs.state := SCancelled;
       end if;
     else
       \* - The observer has been interrupted and its scope is OParent. The interrupt is handled by the
@@ -297,11 +319,11 @@ begin
 end process;
 
 (* Ths represents
-        def outStream =
-          outChan.stream
-            .flatMap { chunk =>
-              Stream.chunk(chunk).onFinalize(guard.release)
-            }
+	def outStream =
+	  outChan.stream
+	    .flatMap { chunk =>
+	      Stream.chunk(chunk).onFinalize(guard.release)
+	    }
 
     val out = outStream.concurrently(runner)
 
@@ -313,10 +335,15 @@ begin
 OutPopFromChannel:
 while local_running /\ OutRequiresElement do
     await    outChan.closed
-          \/ Len(outChan.contents) > 0
-          \/ Terminated(streams.POut)
-          \/ streams.PObs.state = SErrored;
-    if streams.PObs.state = SErrored then
+	  \/ Len(outChan.contents) > 0
+	  \/ Terminated(streams.POut)
+	  \/ streams.PObs.state = SErrored
+	  \/ outInterrupted;
+    if outInterrupted /\ ~ Terminated(streams.POut) then
+      streams.POut.nRequested := streams.POut.nRequested + 1 ||
+      streams.POut.state := SCancelled;
+      local_running := FALSE;
+    elsif streams.PObs.state = SErrored /\ ~ Terminated(streams.POut) then
       streams.POut.nRequested := streams.POut.nRequested + 1 ||
       streams.POut.state := SErrored;
       local_running := FALSE;
@@ -324,19 +351,21 @@ while local_running /\ OutRequiresElement do
       streams.POut.nRequested := streams.POut.nRequested + 1;
       local_el := Head(outChan.contents);
       outChan.contents := Tail(outChan.contents);
+
       OutOutput:
-        if ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored then
-          streams.POut.received := Append(streams.POut.received, local_el);
-          OutReleaseGuard:
-            release();
-        else
-         \* The stream has terminated or been interrupted by an error in the observer
-         local_running := FALSE;
-        end if;
-    elsif streams.POut.state = SRunning /\ outChan.closed then
-        \* The output channel is closed. We must close the downstream output stream
-        streams.POut.nRequested := streams.POut.nRequested + 1;
-        local_running := FALSE;
+	if ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted then
+	  streams.POut.received := Append(streams.POut.received, local_el);
+
+	  OutReleaseGuard:
+	    release();
+	else
+	 \* The stream has terminated or been interrupted by an error in the observer
+	 local_running := FALSE;
+	end if;
+    elsif ~ Terminated(streams.POut) /\ outChan.closed /\ Len(outChan.contents) = 0 then
+	\* The output channel is closed. We must close the downstream output stream
+	streams.POut.nRequested := streams.POut.nRequested + 1;
+	local_running := FALSE;
     end if;
 end while;
 observerInterrupt := TRUE;
@@ -345,288 +374,402 @@ OutOnFinalize:
   await ~ streams.PObs.state = SRunning;
   if streams.PObs.state = SErrored then
     streams.POut.state := SErrored;
-  else
-    streams.POut.state := SSucceeded;
+  elsif outInterrupted /\ ~ Terminated(streams.POut) then
+    streams.POut.state := SCancelled;
+  elsif ~ Terminated(streams.POut) then
+      streams.POut.state := SSucceeded;
   end if;
 end process;
 
 (* This represents:
-        val out = outStream.concurrently(runner)
+	val out = outStream.concurrently(runner)
 *)
+
+fair process outInterrupt = "out-interrupt"
+begin
+OutInterrupt:
+await Len(streams.POut.received) > 0 \/ Terminated(streams.POut);
+if ~ Terminated(streams.POut) /\ outTermination = TCancel then
+  outInterrupted := TRUE;
+end if;
+end process
 end algorithm;
 
+\* Invariants
 *)
-\* BEGIN TRANSLATION (chksum(pcal) = "e76f3e39" /\ chksum(tla) = "20e99c05")
+
+
+\* BEGIN TRANSLATION (chksum(pcal) = "559af23e" /\ chksum(tla) = "8e57cbf0")
 VARIABLES observerScope, observerHandlesError, inNTake, outNTake, obsNTake,
-	  streams, guard, outChan, pc
+	  inTermination, obsTermination, outTermination, outInterrupted,
+	  streams, guard, outChan, observerInterrupt, pc
 
 (* define statement *)
 PInDownstream == streams.PObs
 
-SinkOutHasElement == Len(streams.PIn.sent) < streams.PIn.nTake
+InHasElement == Len(streams.PIn.sent) < streams.PIn.nTake
 NextElement == Len(streams.PIn.sent) + 1
 
 ObserverRequiresElement ==
   /\   streams.PObs.state = SRunning
   /\   streams.PObs.nRequested < streams.PObs.nTake
-  /\ ~ streams.PIn.uncons
 
 OutRequiresElement == streams.POut.nRequested < streams.POut.nTake
 
+InInterrupted ==
+  (observerScope = OParent \/ observerScope = OTransient) /\ observerInterrupt
+
+ObsRequiresElement == streams.PObs.nRequested < streams.PObs.nTake
+
+InHasSentAllElements == ~ InHasElement
+ObsHasRequestedAllElements == ~ ObsRequiresElement
+ObsHasReceivedAllElements == streams.PObs.nRequested = Len(streams.PObs.received)
 
 InEndState ==
   IF /\ ~ Terminated(streams.PIn)
-     /\ ~ SinkOutHasElement
-       \/ ~ streams.PObs.nRequested < streams.PObs.nTake
+     /\ InHasSentAllElements
+       \/ ObsHasRequestedAllElements
   THEN
-    CASE streams.PIn.termination = TError  -> SErrored
-      [] streams.PIn.termination = TCancel -> SCancelled
-      [] OTHER                             -> SSucceeded
+    CASE streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements  -> SErrored
+      [] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements -> SCancelled
+      [] OTHER                                                   -> SSucceeded
+  ELSE IF /\ ~ Terminated(streams.PIn) /\ InInterrupted
+  THEN SCancelled
   ELSE SSucceeded
 
 InObserverEndState ==
   IF /\ ~ Terminated(streams.PIn)
      /\ ~ Terminated(streams.PObs)
-     /\ observerScope = OParent
-     /\ ~ SinkOutHasElement
-       \/ ~ streams.PObs.nRequested < streams.PObs.nTake
   THEN
-      CASE streams.PIn.termination = TError  /\ ~ observerHandlesError  -> SErrored
-	[] streams.PIn.termination = TError  /\   observerHandlesError  -> SSucceeded
-	[] streams.PIn.termination = TCancel                            -> SCancelled
-	[] streams.PIn.termination = TSuccess                           -> SSucceeded
-	[] OTHER                                                        -> SSucceeded
-  ELSE
-    streams.PObs.state
+    IF /\ observerScope = OParent
+       /\ InHasSentAllElements
+	 \/ ObsHasRequestedAllElements
+    THEN
+      CASE streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\ ~ observerHandlesError  -> SErrored
+	[] streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\   observerHandlesError  -> SSucceeded
+	[] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements                           -> SCancelled
+	[] streams.PIn.termination = TSuccess                                                -> SSucceeded
+	[] OTHER                                                                             -> SSucceeded
+    ELSE
+      IF InInterrupted
+      THEN SCancelled
+      ELSE streams.PObs.state
+  ELSE streams.PObs.state
+
+StateFromTermination(tstate) ==
+  CASE tstate = TError   -> SErrored
+    [] tstate = TCancel  -> SCancelled
+    [] tstate = TSuccess -> SSucceeded
 
 ObserverEndState ==
   IF observerScope = OTransient
   THEN
     CASE streams.PIn.state = SCancelled                         -> SCancelled
-      [] streams.PIn.state = SSucceeded                         -> SSucceeded
+      [] streams.PIn.state = SSucceeded                         -> StateFromTermination(streams.PObs.termination)
       [] streams.PIn.state = SErrored /\ ~ observerHandlesError -> SErrored
-      [] streams.PIn.state = SErrored /\   observerHandlesError -> SSucceeded
+      [] streams.PIn.state = SErrored /\   observerHandlesError -> StateFromTermination(streams.PObs.termination)
       [] OTHER                                                  -> SSucceeded
   ELSE IF observerScope = ONone THEN
-    CASE streams.PIn.state = SCancelled                         -> SSucceeded
-      [] streams.PIn.state = SSucceeded                         -> SSucceeded
+    CASE streams.PIn.state = SCancelled                         -> StateFromTermination(streams.PObs.termination)
+      [] streams.PIn.state = SSucceeded                         -> StateFromTermination(streams.PObs.termination)
       [] streams.PIn.state = SErrored /\ ~ observerHandlesError -> SErrored
-      [] streams.PIn.state = SErrored /\   observerHandlesError -> SSucceeded
+      [] streams.PIn.state = SErrored /\   observerHandlesError -> StateFromTermination(streams.PObs.termination)
       [] OTHER                                                  -> SSucceeded
 
   ELSE streams.PObs.state
 
-VARIABLE local_el
 
-vars == << observerScope, observerHandlesError, inNTake, outNTake, obsNTake, 
-           streams, guard, outChan, pc, local_el >>
+GuardIsNonNegative == guard >= 0
 
-ProcSet == {"in"} \cup {"observer"} \cup {"out"}
+VARIABLES local_el, local_running
+
+vars == << observerScope, observerHandlesError, inNTake, outNTake, obsNTake,
+	   inTermination, obsTermination, outTermination, outInterrupted,
+	   streams, guard, outChan, observerInterrupt, pc, local_el,
+	   local_running >>
+
+ProcSet == {"in"} \cup {"observer"} \cup {"out"} \cup {"out-interrupt"}
 
 Init == (* Global variables *)
-        /\ observerScope \in observerScopeRange
-        /\ observerHandlesError \in observerHandlesErrorRange
-        /\ inNTake \in inNTakeRange
-        /\ outNTake \in outNTakeRange
-        /\ obsNTake \in obsNTakeRange
-        /\ streams =           [
-                      PIn |-> [
-                        state |-> SRunning,
-                        sent |-> <<>>,
-                        uncons |-> FALSE,
-                        pendingWork |-> FALSE,
-                        nTake |-> inNTake,
-                        termination |-> TSuccess
-                      ],
-                      POut |-> [
-                        state |-> SRunning,
-                        nRequested |-> 0,
-                        received |-> <<>>,
-                        nTake |-> outNTake
-                      ],
-                       PObs |-> [
-                        state |-> SRunning,
-                        nRequested |-> 0,
-                        received |-> <<>>,
-                        nTake |-> obsNTake
-                     
-                      ]
-                     ]
-        /\ guard = 0
-        /\ outChan =           [
-                       closed |-> FALSE,
-                       contents |-> <<>>
-                     ]
-        (* Process out *)
-        /\ local_el = 0
-        /\ pc = [self \in ProcSet |-> CASE self = "in" -> "InOutput"
-                                        [] self = "observer" -> "ObserverComplete"
-                                        [] self = "out" -> "OutPopFromChannel"]
+	/\ observerScope \in observerScopeRange
+	/\ observerHandlesError \in observerHandlesErrorRange
+	/\ inNTake \in inNTakeRange
+	/\ outNTake \in outNTakeRange
+	/\ obsNTake \in obsNTakeRange
+	/\ inTermination \in inTerminationRange
+	/\ obsTermination \in obsTerminationRange
+	/\ outTermination \in outTerminationRange
+	/\ outInterrupted = FALSE
+	/\ streams =           [
+		      PIn |-> [
+			state |-> SRunning,
+			sent |-> <<>>,
+			hasFinalized |-> FALSE,
+			nTake |-> inNTake,
+			termination |-> inTermination
+		      ],
+		      POut |-> [
+			state |-> SRunning,
+			nRequested |-> 0,
+			received |-> <<>>,
+			nTake |-> outNTake
+		      ],
+		       PObs |-> [
+			state |-> SRunning,
+			nRequested |-> 0,
+			received |-> <<>>,
+			nTake |-> obsNTake,
+			termination |-> obsTermination
+		      ]
+		     ]
+	/\ guard = 0
+	/\ outChan =           [
+		       closed |-> FALSE,
+		       contents |-> <<>>
+		     ]
+	/\ observerInterrupt = FALSE
+	(* Process out *)
+	/\ local_el = 0
+	/\ local_running = TRUE
+	/\ pc = [self \in ProcSet |-> CASE self = "in" -> "InOutput"
+					[] self = "observer" -> "ObserverComplete"
+					[] self = "out" -> "OutPopFromChannel"
+					[] self = "out-interrupt" -> "OutInterrupt"]
 
 InOutput == /\ pc["in"] = "InOutput"
-            /\ IF streams.PIn.state = SRunning
-                  /\ streams.PObs.nRequested < streams.PObs.nTake
-                  /\ SinkOutHasElement
-                  THEN /\ local_el' = NextElement
-                       /\ streams' = [streams EXCEPT !.PObs.nRequested = streams.PObs.nRequested + 1,
-                                                     !.PObs.received = Append(streams.PObs.received, local_el'),
-                                                     !.PIn.sent = Append(streams.PIn.sent, local_el'),
-                                                     !.PIn.pendingWork = TRUE]
-                       /\ pc' = [pc EXCEPT !["in"] = "InSendToChannel"]
-                  ELSE /\ pc' = [pc EXCEPT !["in"] = "InComplete"]
-                       /\ UNCHANGED << streams, local_el >>
-            /\ UNCHANGED << observerScope, observerHandlesError, inNTake, 
-                            outNTake, obsNTake, guard, outChan >>
+	    /\ IF /\ ~ Terminated(streams.PIn)
+		  /\ ~ InInterrupted
+		  /\ ObsRequiresElement
+		  THEN /\ IF ~ InHasElement
+			     THEN /\ streams' = [streams EXCEPT !.PObs.nRequested = streams.PObs.nRequested + 1]
+				  /\ pc' = [pc EXCEPT !["in"] = "InComplete"]
+				  /\ UNCHANGED local_el
+			     ELSE /\ local_el' = NextElement
+				  /\ streams' = [streams EXCEPT !.PObs.nRequested = streams.PObs.nRequested + 1,
+								!.PObs.received = Append(streams.PObs.received, local_el'),
+								!.PIn.sent = Append(streams.PIn.sent, local_el')]
+				  /\ pc' = [pc EXCEPT !["in"] = "InSendToChannel"]
+		  ELSE /\ pc' = [pc EXCEPT !["in"] = "InComplete"]
+		       /\ UNCHANGED << streams, local_el >>
+	    /\ UNCHANGED << observerScope, observerHandlesError, inNTake,
+			    outNTake, obsNTake, inTermination, obsTermination,
+			    outTermination, outInterrupted, guard, outChan,
+			    observerInterrupt, local_running >>
 
 InSendToChannel == /\ pc["in"] = "InSendToChannel"
-                   /\ IF Terminated(streams.PIn)
-                         THEN /\ pc' = [pc EXCEPT !["in"] = "InOnFinalize"]
-                              /\ UNCHANGED outChan
-                         ELSE /\ IF ~ outChan.closed
-                                    THEN /\ outChan' = [outChan EXCEPT !.contents = Append(outChan.contents, NextElement)]
-                                    ELSE /\ TRUE
-                                         /\ UNCHANGED outChan
-                              /\ pc' = [pc EXCEPT !["in"] = "InAcquireGuard"]
-                   /\ UNCHANGED << observerScope, observerHandlesError, 
-                                   inNTake, outNTake, obsNTake, streams, guard, 
-                                   local_el >>
+		   /\ IF \/ Terminated(streams.PIn)
+			 \/ InInterrupted
+			 THEN /\ pc' = [pc EXCEPT !["in"] = "InComplete"]
+			      /\ UNCHANGED outChan
+			 ELSE /\ IF ~ outChan.closed
+				    THEN /\ outChan' = [outChan EXCEPT !.contents = Append(outChan.contents, local_el)]
+				    ELSE /\ TRUE
+					 /\ UNCHANGED outChan
+			      /\ pc' = [pc EXCEPT !["in"] = "InAcquireGuard"]
+		   /\ UNCHANGED << observerScope, observerHandlesError,
+				   inNTake, outNTake, obsNTake, inTermination,
+				   obsTermination, outTermination,
+				   outInterrupted, streams, guard,
+				   observerInterrupt, local_el, local_running >>
 
 InAcquireGuard == /\ pc["in"] = "InAcquireGuard"
-                  /\ IF Terminated(streams.PIn)
-                        THEN /\ pc' = [pc EXCEPT !["in"] = "InOnFinalize"]
-                             /\ guard' = guard
-                        ELSE /\ IF guard > 0
-                                   THEN /\ guard' = guard - 1
-                                   ELSE /\ guard > 0 \/ Terminated(streams.PIn)
-                                        /\ guard' = guard
-                             /\ pc' = [pc EXCEPT !["in"] = "InOutput"]
-                  /\ UNCHANGED << observerScope, observerHandlesError, inNTake, 
-                                  outNTake, obsNTake, streams, outChan, 
-                                  local_el >>
+		  /\ IF /\ ~ Terminated(streams.PIn)
+			/\ ~ InInterrupted
+			THEN /\ IF guard > 0
+				   THEN /\ guard' = guard - 1
+				   ELSE /\ guard > 0 \/ Terminated(streams.PIn) \/ InInterrupted
+					/\ guard' = guard
+			ELSE /\ TRUE
+			     /\ guard' = guard
+		  /\ pc' = [pc EXCEPT !["in"] = "InOutput"]
+		  /\ UNCHANGED << observerScope, observerHandlesError, inNTake,
+				  outNTake, obsNTake, inTermination,
+				  obsTermination, outTermination,
+				  outInterrupted, streams, outChan,
+				  observerInterrupt, local_el, local_running >>
 
 InComplete == /\ pc["in"] = "InComplete"
-              /\ IF streams.PIn.state = SRunning
-                    THEN /\ streams' = [streams EXCEPT !.PIn.state = InEndState,
-                                                       !.PObs.state = InObserverEndState]
-                    ELSE /\ TRUE
-                         /\ UNCHANGED streams
-              /\ pc' = [pc EXCEPT !["in"] = "InOnFinalize"]
-              /\ UNCHANGED << observerScope, observerHandlesError, inNTake, 
-                              outNTake, obsNTake, guard, outChan, local_el >>
+	      /\ IF streams.PIn.state = SRunning
+		    THEN /\ streams' = [streams EXCEPT !.PIn.state = InEndState,
+						       !.PObs.state = InObserverEndState]
+		    ELSE /\ TRUE
+			 /\ UNCHANGED streams
+	      /\ pc' = [pc EXCEPT !["in"] = "InOnFinalize"]
+	      /\ UNCHANGED << observerScope, observerHandlesError, inNTake,
+			      outNTake, obsNTake, inTermination,
+			      obsTermination, outTermination, outInterrupted,
+			      guard, outChan, observerInterrupt, local_el,
+			      local_running >>
 
 InOnFinalize == /\ pc["in"] = "InOnFinalize"
-                /\ streams' = [streams EXCEPT !.PIn.pendingWork = FALSE]
-                /\ pc' = [pc EXCEPT !["in"] = "Done"]
-                /\ UNCHANGED << observerScope, observerHandlesError, inNTake, 
-                                outNTake, obsNTake, guard, outChan, local_el >>
+		/\ streams' = [streams EXCEPT !.PIn.hasFinalized = TRUE]
+		/\ pc' = [pc EXCEPT !["in"] = "Done"]
+		/\ UNCHANGED << observerScope, observerHandlesError, inNTake,
+				outNTake, obsNTake, inTermination,
+				obsTermination, outTermination, outInterrupted,
+				guard, outChan, observerInterrupt, local_el,
+				local_running >>
 
 in == InOutput \/ InSendToChannel \/ InAcquireGuard \/ InComplete
-         \/ InOnFinalize
+	 \/ InOnFinalize
 
 ObserverComplete == /\ pc["observer"] = "ObserverComplete"
-                    /\ IF ~ observerScope = OParent
-                          THEN /\ \/ Terminated(streams.PObs)
-                                  \/ Terminated(streams.PIn)
-                               /\ IF ~ Terminated(streams.PObs) /\ Terminated(streams.PIn)
-                                     THEN /\ streams' = [streams EXCEPT !.PObs.state = ObserverEndState]
-                                     ELSE /\ IF /\ streams.PObs.state = SCancelled
-                                                /\ observerScope = ONone
-                                                /\ streams.PIn.state = SRunning
-                                                THEN /\ streams' = [streams EXCEPT !.PIn.state = SCancelled]
-                                                ELSE /\ TRUE
-                                                     /\ UNCHANGED streams
-                          ELSE /\ TRUE
-                               /\ UNCHANGED streams
-                    /\ pc' = [pc EXCEPT !["observer"] = "ObserverOnFinalize"]
-                    /\ UNCHANGED << observerScope, observerHandlesError, 
-                                    inNTake, outNTake, obsNTake, guard, 
-                                    outChan, local_el >>
+		    /\ IF ~ observerScope = OParent
+			  THEN /\ \/ Terminated(streams.PObs)
+				  \/ Terminated(streams.PIn)
+				  \/ observerInterrupt
+			       /\ IF ~ Terminated(streams.PObs) /\ ~ observerInterrupt /\ Terminated(streams.PIn)
+				     THEN /\ streams' = [streams EXCEPT !.PObs.state = ObserverEndState]
+				     ELSE /\ IF /\ observerInterrupt /\ (observerScope = ONone \/ observerScope = OTransient)
+						THEN /\ IF streams.PIn.state = SRunning
+							   THEN /\ streams' = [streams EXCEPT !.PIn.state = SCancelled,
+											      !.PObs.state = SCancelled]
+							   ELSE /\ streams' = [streams EXCEPT !.PObs.state = SCancelled]
+						ELSE /\ TRUE
+						     /\ UNCHANGED streams
+			  ELSE /\ TRUE
+			       /\ UNCHANGED streams
+		    /\ pc' = [pc EXCEPT !["observer"] = "ObserverOnFinalize"]
+		    /\ UNCHANGED << observerScope, observerHandlesError,
+				    inNTake, outNTake, obsNTake, inTermination,
+				    obsTermination, outTermination,
+				    outInterrupted, guard, outChan,
+				    observerInterrupt, local_el, local_running >>
 
 ObserverOnFinalize == /\ pc["observer"] = "ObserverOnFinalize"
-                      /\ ~ streams.PIn.pendingWork
-                      /\ outChan' = [outChan EXCEPT !.closed = TRUE]
-                      /\ pc' = [pc EXCEPT !["observer"] = "Done"]
-                      /\ UNCHANGED << observerScope, observerHandlesError, 
-                                      inNTake, outNTake, obsNTake, streams, 
-                                      guard, local_el >>
+		      /\ streams.PIn.hasFinalized
+		      /\ outChan' = [outChan EXCEPT !.closed = TRUE]
+		      /\ pc' = [pc EXCEPT !["observer"] = "Done"]
+		      /\ UNCHANGED << observerScope, observerHandlesError,
+				      inNTake, outNTake, obsNTake,
+				      inTermination, obsTermination,
+				      outTermination, outInterrupted, streams,
+				      guard, observerInterrupt, local_el,
+				      local_running >>
 
 observer == ObserverComplete \/ ObserverOnFinalize
 
 OutPopFromChannel == /\ pc["out"] = "OutPopFromChannel"
-                     /\ IF streams.POut.state = SRunning /\ OutRequiresElement
-                           THEN /\    outChan.closed
-                                   \/ Len(outChan.contents) > 0
-                                   \/ ~ streams.POut.state = SRunning
-                                /\ IF Len(outChan.contents) > 0 /\ ~ Terminated(streams.POut)
-                                      THEN /\ streams' = [streams EXCEPT !.POut.nRequested = streams.POut.nRequested + 1]
-                                           /\ local_el' = Head(outChan.contents)
-                                           /\ outChan' = [outChan EXCEPT !.contents = Tail(outChan.contents)]
-                                           /\ pc' = [pc EXCEPT !["out"] = "OutOutput"]
-                                      ELSE /\ IF streams.POut.state = SRunning /\ outChan.closed
-                                                 THEN /\ streams' = [streams EXCEPT !.POut.nRequested = streams.POut.nRequested + 1,
-                                                                                    !.POut.state = SSucceeded]
-                                                 ELSE /\ TRUE
-                                                      /\ UNCHANGED streams
-                                           /\ pc' = [pc EXCEPT !["out"] = "OutPopFromChannel"]
-                                           /\ UNCHANGED << outChan, local_el >>
-                           ELSE /\ IF streams.POut.state = SRunning /\ ~ OutRequiresElement
-                                      THEN /\ streams' = [streams EXCEPT !.POut.state = SSucceeded]
-                                      ELSE /\ TRUE
-                                           /\ UNCHANGED streams
-                                /\ pc' = [pc EXCEPT !["out"] = "OutOnFinalize"]
-                                /\ UNCHANGED << outChan, local_el >>
-                     /\ UNCHANGED << observerScope, observerHandlesError, 
-                                     inNTake, outNTake, obsNTake, guard >>
+		     /\ IF local_running /\ OutRequiresElement
+			   THEN /\    outChan.closed
+				   \/ Len(outChan.contents) > 0
+				   \/ Terminated(streams.POut)
+				   \/ streams.PObs.state = SErrored
+				   \/ outInterrupted
+				/\ IF outInterrupted /\ ~ Terminated(streams.POut)
+				      THEN /\ streams' = [streams EXCEPT !.POut.nRequested = streams.POut.nRequested + 1,
+									 !.POut.state = SCancelled]
+					   /\ local_running' = FALSE
+					   /\ pc' = [pc EXCEPT !["out"] = "OutPopFromChannel"]
+					   /\ UNCHANGED << outChan, local_el >>
+				      ELSE /\ IF streams.PObs.state = SErrored /\ ~ Terminated(streams.POut)
+						 THEN /\ streams' = [streams EXCEPT !.POut.nRequested = streams.POut.nRequested + 1,
+										    !.POut.state = SErrored]
+						      /\ local_running' = FALSE
+						      /\ pc' = [pc EXCEPT !["out"] = "OutPopFromChannel"]
+						      /\ UNCHANGED << outChan,
+								      local_el >>
+						 ELSE /\ IF Len(outChan.contents) > 0 /\ ~ Terminated(streams.POut)
+							    THEN /\ streams' = [streams EXCEPT !.POut.nRequested = streams.POut.nRequested + 1]
+								 /\ local_el' = Head(outChan.contents)
+								 /\ outChan' = [outChan EXCEPT !.contents = Tail(outChan.contents)]
+								 /\ pc' = [pc EXCEPT !["out"] = "OutOutput"]
+								 /\ UNCHANGED local_running
+							    ELSE /\ IF ~ Terminated(streams.POut) /\ outChan.closed /\ Len(outChan.contents) = 0
+								       THEN /\ streams' = [streams EXCEPT !.POut.nRequested = streams.POut.nRequested + 1]
+									    /\ local_running' = FALSE
+								       ELSE /\ TRUE
+									    /\ UNCHANGED << streams,
+											    local_running >>
+								 /\ pc' = [pc EXCEPT !["out"] = "OutPopFromChannel"]
+								 /\ UNCHANGED << outChan,
+										 local_el >>
+				/\ UNCHANGED observerInterrupt
+			   ELSE /\ observerInterrupt' = TRUE
+				/\ pc' = [pc EXCEPT !["out"] = "OutOnFinalize"]
+				/\ UNCHANGED << streams, outChan, local_el,
+						local_running >>
+		     /\ UNCHANGED << observerScope, observerHandlesError,
+				     inNTake, outNTake, obsNTake,
+				     inTermination, obsTermination,
+				     outTermination, outInterrupted, guard >>
 
 OutOutput == /\ pc["out"] = "OutOutput"
-             /\ IF ~ Terminated(streams.POut)
-                   THEN /\ streams' = [streams EXCEPT !.POut.received = Append(streams.POut.received, local_el)]
-                   ELSE /\ TRUE
-                        /\ UNCHANGED streams
-             /\ pc' = [pc EXCEPT !["out"] = "OutReleaseGuard"]
-             /\ UNCHANGED << observerScope, observerHandlesError, inNTake, 
-                             outNTake, obsNTake, guard, outChan, local_el >>
+	     /\ IF ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted
+		   THEN /\ streams' = [streams EXCEPT !.POut.received = Append(streams.POut.received, local_el)]
+			/\ pc' = [pc EXCEPT !["out"] = "OutReleaseGuard"]
+			/\ UNCHANGED local_running
+		   ELSE /\ local_running' = FALSE
+			/\ pc' = [pc EXCEPT !["out"] = "OutPopFromChannel"]
+			/\ UNCHANGED streams
+	     /\ UNCHANGED << observerScope, observerHandlesError, inNTake,
+			     outNTake, obsNTake, inTermination, obsTermination,
+			     outTermination, outInterrupted, guard, outChan,
+			     observerInterrupt, local_el >>
 
 OutReleaseGuard == /\ pc["out"] = "OutReleaseGuard"
-                   /\ guard' = guard + 1
-                   /\ pc' = [pc EXCEPT !["out"] = "OutPopFromChannel"]
-                   /\ UNCHANGED << observerScope, observerHandlesError, 
-                                   inNTake, outNTake, obsNTake, streams, 
-                                   outChan, local_el >>
+		   /\ guard' = guard + 1
+		   /\ pc' = [pc EXCEPT !["out"] = "OutPopFromChannel"]
+		   /\ UNCHANGED << observerScope, observerHandlesError,
+				   inNTake, outNTake, obsNTake, inTermination,
+				   obsTermination, outTermination,
+				   outInterrupted, streams, outChan,
+				   observerInterrupt, local_el, local_running >>
 
 OutOnFinalize == /\ pc["out"] = "OutOnFinalize"
-                 /\ IF streams.PObs.state = SRunning
-                       THEN /\ IF observerScope = OParent
-                                  THEN /\ streams' = [streams EXCEPT !.PObs.state = SCancelled,
-                                                                     !.PIn.state = SCancelled]
-                                  ELSE /\ streams' = [streams EXCEPT !.PObs.state = SCancelled]
-                       ELSE /\ TRUE
-                            /\ UNCHANGED streams
-                 /\ pc' = [pc EXCEPT !["out"] = "Done"]
-                 /\ UNCHANGED << observerScope, observerHandlesError, inNTake, 
-                                 outNTake, obsNTake, guard, outChan, local_el >>
+		 /\ ~ streams.PObs.state = SRunning
+		 /\ IF streams.PObs.state = SErrored
+		       THEN /\ streams' = [streams EXCEPT !.POut.state = SErrored]
+		       ELSE /\ IF outInterrupted /\ ~ Terminated(streams.POut)
+				  THEN /\ streams' = [streams EXCEPT !.POut.state = SCancelled]
+				  ELSE /\ IF ~ Terminated(streams.POut)
+					     THEN /\ streams' = [streams EXCEPT !.POut.state = SSucceeded]
+					     ELSE /\ TRUE
+						  /\ UNCHANGED streams
+		 /\ pc' = [pc EXCEPT !["out"] = "Done"]
+		 /\ UNCHANGED << observerScope, observerHandlesError, inNTake,
+				 outNTake, obsNTake, inTermination,
+				 obsTermination, outTermination,
+				 outInterrupted, guard, outChan,
+				 observerInterrupt, local_el, local_running >>
 
 out == OutPopFromChannel \/ OutOutput \/ OutReleaseGuard \/ OutOnFinalize
 
+OutInterrupt == /\ pc["out-interrupt"] = "OutInterrupt"
+		/\ Len(streams.POut.received) > 0 \/ Terminated(streams.POut)
+		/\ IF ~ Terminated(streams.POut) /\ outTermination = TCancel
+		      THEN /\ outInterrupted' = TRUE
+		      ELSE /\ TRUE
+			   /\ UNCHANGED outInterrupted
+		/\ pc' = [pc EXCEPT !["out-interrupt"] = "Done"]
+		/\ UNCHANGED << observerScope, observerHandlesError, inNTake,
+				outNTake, obsNTake, inTermination,
+				obsTermination, outTermination, streams, guard,
+				outChan, observerInterrupt, local_el,
+				local_running >>
+
+outInterrupt == OutInterrupt
+
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
-               /\ UNCHANGED vars
+	       /\ UNCHANGED vars
 
-Next == in \/ observer \/ out
-           \/ Terminating
+Next == in \/ observer \/ out \/ outInterrupt
+	   \/ Terminating
 
 Spec == /\ Init /\ [][Next]_vars
-        /\ WF_vars(in)
-        /\ WF_vars(observer)
-        /\ WF_vars(out)
+	/\ WF_vars(in)
+	/\ WF_vars(observer)
+	/\ WF_vars(out)
+	/\ WF_vars(outInterrupt)
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION 
+\* END TRANSLATION
 
 INSTANCE ObserveSpec
 
 =============================================================================
 \* Modification History
-\* Last modified Fri Jan 14 18:30:59 GMT 2022 by zainab
+\* Last modified Sat Jan 15 23:42:31 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab

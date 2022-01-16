@@ -5,13 +5,13 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="20"/>
+    <intAttribute key="fpIndex" value="80"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="inNTake, local_el, local_running, obsNTake, pc, obsTermination, observerInterrupt, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
+    <stringAttribute key="modelBehaviorVars" value="inNTake, outTermination, local_el, outInterrupted, local_running, obsNTake, pc, obsTermination, observerInterrupt, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
     <stringAttribute key="modelComments" value=""/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
@@ -20,12 +20,13 @@
         <listEntry value="1InSendsAtMostOneMoreThanOutReceives"/>
         <listEntry value="0OutSucceedsThenOutElementsEqualsInElements"/>
         <listEntry value="1ObserverSucceedsThenObserverElementsEqualsInElements"/>
+        <listEntry value="1GuardIsNonNegative"/>
     </listAttribute>
     <listAttribute key="modelCorrectnessProperties">
         <listEntry value="0Termination"/>
     </listAttribute>
     <intAttribute key="modelEditorOpenTabs" value="8"/>
-    <stringAttribute key="modelExpressionEval" value="BOOLEAN"/>
+    <stringAttribute key="modelExpressionEval" value="{ x \in outNTakeRange : \A y \in outNTakeRange : x &lt;= y /\ ~ x = 0 } = {}"/>
     <stringAttribute key="modelParameterActionConstraint" value=""/>
     <listAttribute key="modelParameterConstants">
         <listEntry value="States;;{S_Running, S_Succeeded, S_Cancelled, S_Errored};1;0"/>
@@ -52,6 +53,7 @@
         <listEntry value="TSuccess;;T_Success;0;0"/>
         <listEntry value="inTerminationRange;;{TSuccess, TError, TCancel};0;0"/>
         <listEntry value="obsTerminationRange;;{TSuccess, TError, TCancel};0;0"/>
+        <listEntry value="outTerminationRange;;{TSuccess, TCancel};0;0"/>
     </listAttribute>
     <stringAttribute key="modelParameterContraint" value=""/>
     <listAttribute key="modelParameterDefinitions"/>

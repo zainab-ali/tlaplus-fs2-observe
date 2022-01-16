@@ -71,12 +71,14 @@ ObserverRequestsMoreElementsThanOutThenObserverEventuallyTerimnatesWithCancel ==
   /\ streams.PObs.nRequested > streams.POut.nRequested
   ~> streams.PObs.state = SCancelled
 
+\* FIXME: This is untrue
 \* If the observer is cancelled then the output should also be cancelled.
 ObserverIsCancelledThenOutputEventuallyTerminatesWithCancel ==
   /\ streams.PObs.state = SCancelled
   /\ streams.POut.state = SRunning
   ~> streams.POut.state = SCancelled
 
+\* FIXME: This is untrue. Only if the observer requests more elements than out
 \* If the output is cancelled then the observer should also be cancelled.
 OuIsCancelledThenObserverEventuallyTerminatesWithCancel ==
   /\ streams.POut.state = SCancelled
