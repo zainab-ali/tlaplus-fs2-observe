@@ -1,5 +1,5 @@
 ------------------------------ MODULE observe ------------------------------
-EXTENDS Integers, Sequences, FiniteSets
+EXTENDS Integers, Sequences, FiniteSets, TLC
 (**************************************************************************)
 (* This TLA+ Spec verifies the reworked version of observe:              
                                                                        
@@ -76,7 +76,7 @@ ASSUME NonEmpty(outNTakeRange) /\ Naturals(outNTakeRange)  /\ Minimum(outNTakeRa
 ASSUME NonEmpty(observerScopeRange) /\ observerScopeRange \subseteq ObserverScopes
 ASSUME NonEmpty(observerHandlesErrorRange) /\ observerHandlesErrorRange \subseteq BOOLEAN
 ASSUME NonEmpty(inTerminationRange) /\ inTerminationRange \subseteq TerminationStates
-ASSUME NonEmpty(obsTerminationRange) /\ obsTerminationRange \subseteq TerminationStates
+ASSUME NonEmpty(obsTerminationRange) /\ obsTerminationRange \subseteq {TSuccess, TError}
 ASSUME NonEmpty(outTerminationRange) /\ outTerminationRange \subseteq {TSuccess, TCancel}
 
 (* --algorithm observe
@@ -88,6 +88,7 @@ variable observerScope \in observerScopeRange,
          inTermination \in inTerminationRange,
          obsTermination \in obsTerminationRange,
          outTermination \in outTerminationRange,
+         inInterrupted = FALSE,
          outInterrupted = FALSE,
          streams = [
            PIn |-> [
@@ -137,36 +138,31 @@ ObsHasReceivedAllElements == streams.PObs.nRequested = Len(streams.PObs.received
 
 OutRequiresElement == streams.POut.nRequested < streams.POut.nTake
 
-InInterrupted ==
+ObserverInterrupted ==
   (observerScope = OParent \/ observerScope = OTransient) /\ observerInterrupt
 
 InEndState ==
   IF /\ ~ Terminated(streams.PIn)
-     /\ InHasSentAllElements
-       \/ ObsHasRequestedAllElements
+     /\ ~ (ObserverInterrupted \/ inInterrupted)
   THEN
     CASE streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements  -> SErrored
-      [] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements -> SCancelled
-      [] OTHER                                                   -> SSucceeded
-  ELSE IF /\ ~ Terminated(streams.PIn) /\ InInterrupted
-  THEN SCancelled
-  ELSE SSucceeded
+      [] OTHER                                                            -> SSucceeded
+  ELSE IF /\ ~ Terminated(streams.PIn) /\ (ObserverInterrupted \/ inInterrupted)
+    THEN SCancelled
+  ELSE Assert(~ Terminated(streams.PIn), "Impossible code path: the input stream should be running, but is not.") 
 
 InObserverEndState ==
   IF /\ ~ Terminated(streams.PIn)
      /\ ~ Terminated(streams.PObs)
   THEN
-    IF /\ observerScope = OParent
-       /\ InHasSentAllElements
-         \/ ObsHasRequestedAllElements
+    IF observerScope = OParent /\ ~ ObserverInterrupted
     THEN
       CASE streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\ ~ observerHandlesError  -> SErrored
         [] streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\   observerHandlesError  -> SSucceeded
-        [] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements                           -> SCancelled
         [] streams.PIn.termination = TSuccess                                                -> SSucceeded
         [] OTHER                                                                             -> SSucceeded
     ELSE
-      IF InInterrupted
+      IF ObserverInterrupted
       THEN SCancelled
       ELSE streams.PObs.state
   ELSE streams.PObs.state
@@ -179,7 +175,7 @@ StateFromTermination(tstate) ==
 ObserverEndState ==
   IF observerScope = OTransient
   THEN
-    CASE streams.PIn.state = SCancelled                         -> SCancelled
+    CASE streams.PIn.state = SCancelled                         -> StateFromTermination(streams.PObs.termination)
       [] streams.PIn.state = SSucceeded                         -> StateFromTermination(streams.PObs.termination)
       [] streams.PIn.state = SErrored /\ ~ observerHandlesError -> SErrored
       [] streams.PIn.state = SErrored /\   observerHandlesError -> StateFromTermination(streams.PObs.termination)
@@ -190,7 +186,7 @@ ObserverEndState ==
       [] streams.PIn.state = SErrored /\ ~ observerHandlesError -> SErrored
       [] streams.PIn.state = SErrored /\   observerHandlesError -> StateFromTermination(streams.PObs.termination)
       [] OTHER                                                  -> SSucceeded
-  ELSE streams.PObs.state
+  ELSE Assert(Terminated(streams.PObs.state), "The observer scope was OParent, but the observer was not terminated by the in process.")
 
 
 (* Define invariants for sanity checking *)
@@ -201,7 +197,7 @@ macro acquire() begin
   if guard > 0 then
     guard := guard - 1;
   else
-    await guard > 0 \/ Terminated(streams.PIn) \/ InInterrupted;
+    await guard > 0 \/ Terminated(streams.PIn) \/ ObserverInterrupted \/ inInterrupted;
   end if;
 end macro;
 
@@ -226,7 +222,8 @@ fair process in = "in"
 begin
   InOutput:
   while /\ ~ Terminated(streams.PIn)
-        /\ ~ InInterrupted
+        /\ ~ ObserverInterrupted
+	/\ ~ inInterrupted
         /\ ObsRequiresElement do
     if ~ InHasElement then
       \* The observer has requested an element, but there are none to send.
@@ -240,7 +237,8 @@ begin
 
       InSendToChannel:
         if \/ Terminated(streams.PIn)
-           \/ InInterrupted then
+	       \/ inInterrupted
+           \/ ObserverInterrupted then
           goto InComplete;
         elsif ~ outChan.closed then
           outChan.contents := Append(outChan.contents, local_el);
@@ -252,7 +250,8 @@ begin
 
       InAcquireGuard:
         if /\ ~ Terminated(streams.PIn)
-           /\ ~ InInterrupted then
+	       /\ ~ inInterrupted
+           /\ ~ ObserverInterrupted then
           acquire();
         else
           \* The input has been terminated or interrupted
@@ -302,16 +301,21 @@ begin
   \* The steps between the input termination and this step represents that work
     if ~ Terminated(streams.PObs) /\ ~ observerInterrupt /\ Terminated(streams.PIn) then
       streams.PObs.state := ObserverEndState;
-    elsif /\ observerInterrupt /\ (observerScope = ONone \/ observerScope = OTransient) then
+  \* If the input stream has not terminated, and is running concurrently to the observer, then it must be interrupted.
+    elsif /\ observerInterrupt /\ observerScope = ONone then
       if streams.PIn.state = SRunning then
         streams.PIn.state := SCancelled || streams.PObs.state := SCancelled;
       else
         streams.PObs.state := SCancelled;
       end if;
+    elsif ~ Terminated(streams.PObs) /\ observerInterrupt /\ Terminated(streams.PIn) /\ observerScope = OTransient then
+      streams.PObs.state := SCancelled;
     else
       \* Either:
       \* - The observer has been interrupted and its scope is OParent. The interrupt is handled by the
       \*     "in" process.
+      \* - The observer has been interrupted and its scope is OTransient and the "in" process is still running. The
+      \*   interrupt is handled by the "in" process.
       \* - The observer has been terminated, but not interrupted, by some other process.
       \* - The "in" stream and the observer have both been terminated, but not interrupted, by some other process.
       skip;
@@ -319,7 +323,9 @@ begin
   end if;
   ObserverOnFinalize:
     await streams.PIn.hasFinalized; \* Wait for the "in" stream to terminate before closing the channel
-    outChan.closed := TRUE;
+    if streams.PObs.state = SSucceeded then 
+      outChan.closed := TRUE;
+    end if;
 end process;
 
 (* Ths represents
@@ -397,6 +403,17 @@ if ~ Terminated(streams.POut) /\ outTermination = TCancel then
   outInterrupted := TRUE;
 end if;
 end process
+
+fair process inInterrupt = "in-interrupt"
+begin
+InInterrupt:
+if ~ Terminated(streams.PIn) /\ inTermination = TCancel then
+  inInterrupted := TRUE;
+end if;
+end process
+
+
+
 end algorithm;
 
 \* Invariants
