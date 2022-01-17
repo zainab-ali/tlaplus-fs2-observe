@@ -1,50 +1,58 @@
 ------------------------------ MODULE observe ------------------------------
 EXTENDS Integers, Sequences, FiniteSets
-(* This TLA+ Spec verifies the reworked version of observe:
+(**************************************************************************)
+(* This TLA+ Spec verifies the reworked version of observe:              
+                                                                       
+ ```                                                                   
+  for {                                                                 
+    guard <- Semaphore[F](maxQueued - 1)
+    outChan <- Channel.unbounded[F, Chunk[O]]
+  } yield {
+ 
+    val sinkOut: Stream[F, O] = {
+      def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
+        s.pull.uncons1.flatMap { \\ InOutput
+          case None => Pull.done
+          case Some((ch, rest)) =>
+            Pull.output(ch) >>
+             Pull.eval(outChan.send(ch) \\ InSendToChannel
+                       >> guard.acquire \\ InAcquireGuard
+                       ) >>
+                    go(rest)
+        }
+ 
+      go(self.chunks).stream
+    }
+ 
+    val runner =
+      sinkOut.through(pipe)             \\ InComplete, ObserverComplete
+        .onFinalize(outChan.close.void) \\ ObserverOnFinalize
+ 
+    def outStream =
+      outChan.stream \\ OutPopFromChannel
+        .flatMap { chunk =>
+          Stream.chunk(chunk) \\ OutOutput
+            .onFinalize(guard.release) \\ OutReleaseGuard
+        }
+ 
+    val out = outStream.concurrently(runner)  \\ OutOnFinalize
+    out
+  }
+ ```
+ 
+ There are three processes:
+   - PIn represents the input stream `self.chunks` and `sinkOut`.
+   - PObs represents the observer `onFinalize(outChan.close.void)`.
+   - POut represents the output stream `outStream`, including the logic
+     interrupting the observer with `concurrently`.
+ 
+ The parameter `maxQueued` is fixed at 1 to test `observe` only, so excludes
+ `observeAsync`.
+ 
+ The input stream `self` is finite, capped at nTake.
+ *)
 
-```
-      for {
-	guard <- Semaphore[F](maxQueued - 1)
-	outChan <- Channel.unbounded[F, Chunk[O]]
-      } yield {
-
-	val sinkOut: Stream[F, O] = {
-	  def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
-	    s.pull.uncons1.flatMap {
-	      case None => Pull.done
-	      case Some((ch, rest)) =>
-		Pull.output(ch) >> Pull.eval(outChan.send(ch) >> guard.acquire) >> go(rest)
-	    }
-
-	  go(self.chunks).stream
-	}
-
-	val runner =
-	  sinkOut.through(pipe).onFinalize(outChan.close.void)
-
-	def outStream =
-	  outChan.stream
-	    .flatMap { chunk =>
-	      Stream.chunk(chunk).onFinalize(guard.release)
-	    }
-
-	val out = outStream.concurrently(runner)
-	out
-      }
-```
-
-Where:
- - PIn corresponds to self.chunks
- - POut corresponds to out
- - PObs corresponds to the result of sinkOut.through(pipe)
-
-The parameter `maxQueued` is fixed at 1 to test `observe` only, so excludes
-`observeAsync`.
-
-The input stream `self` is finite, capped at nTake.
-*)
-
-\* Redeclare the symbols from ObserveSpec
+(* Redeclare the symbols from ObserveSpec *)
 CONSTANTS Streams, PIn, POut, PObs
 CONSTANTS States, SRunning, SErrored, SCancelled, SSucceeded
 CONSTANTS TerminationStates, TError, TCancel, TSuccess
@@ -55,6 +63,7 @@ CONSTANT observerScopeRange
 CONSTANT observerHandlesErrorRange
 CONSTANT inTerminationRange, obsTerminationRange, outTerminationRange
 
+(* Validate the parameters set in the model *)
 NonEmpty(S) == ~ S = {}
 Minimum(S) == CHOOSE x \in S : \A y \in S : x <= y
 
@@ -70,70 +79,66 @@ ASSUME NonEmpty(inTerminationRange) /\ inTerminationRange \subseteq TerminationS
 ASSUME NonEmpty(obsTerminationRange) /\ obsTerminationRange \subseteq TerminationStates
 ASSUME NonEmpty(outTerminationRange) /\ outTerminationRange \subseteq {TSuccess, TCancel}
 
-AppendHead(seq, els) == Append(seq, Head(els))
-
-Terminated(stream) == ~ stream.state = SRunning
-
-
 (* --algorithm observe
 variable observerScope \in observerScopeRange,
-	 observerHandlesError \in observerHandlesErrorRange,
-	 inNTake \in inNTakeRange,
-	 outNTake \in outNTakeRange,
-	 obsNTake \in obsNTakeRange,
-	 inTermination \in inTerminationRange,
-	 obsTermination \in obsTerminationRange,
-	 outTermination \in outTerminationRange,
-	     outInterrupted = FALSE,
-streams = [
- PIn |-> [
-   state |-> SRunning,
-   sent |-> <<>>,
-   hasFinalized |-> FALSE,      \* Whether the in stream has work to do before the observer stream can finalize
-   nTake |-> inNTake,          \* The maximum number of elements to send
-   termination |-> inTermination    \* The state we intend the stream to terminate in, should all its elements be requested.
- ],
- POut |-> [
-   state |-> SRunning,
-   nRequested |-> 0,
-   received |-> <<>>,
-   nTake |-> outNTake
- ],
-  PObs |-> [
-   state |-> SRunning,
-   nRequested |-> 0,
-   received |-> <<>>,
-   nTake |-> obsNTake,           \* The maximum number of elements to request from upstream
-   termination |-> obsTermination \* The state we intend the stream to terminate in, should all its elements be requested.
- ]
-],
-guard = 0,
-outChan = [
-  closed |-> FALSE,
-  contents |-> <<>>
-],
-observerInterrupt = FALSE;
+         observerHandlesError \in observerHandlesErrorRange,
+         inNTake \in inNTakeRange,
+         outNTake \in outNTakeRange,
+         obsNTake \in obsNTakeRange,
+         inTermination \in inTerminationRange,
+         obsTermination \in obsTerminationRange,
+         outTermination \in outTerminationRange,
+         outInterrupted = FALSE,
+         streams = [
+           PIn |-> [
+             state |-> SRunning,
+             sent |-> <<>>,
+             hasFinalized |-> FALSE,      \* Whether the in stream has work to do before the observer stream can finalize
+             nTake |-> inNTake,          \* The maximum number of elements to send
+             termination |-> inTermination    \* The state we intend the stream to terminate in, should all its elements be requested.
+           ],
+           POut |-> [
+             state |-> SRunning,
+             nRequested |-> 0,
+             received |-> <<>>,
+             nTake |-> outNTake
+           ],
+           PObs |-> [
+            state |-> SRunning,
+            nRequested |-> 0,
+            received |-> <<>>,
+            nTake |-> obsNTake,           \* The maximum number of elements to request from upstream
+            termination |-> obsTermination \* The state we intend the stream to terminate in, should all its elements be requested.
+           ]
+         ],
+         guard = 0,
+         outChan = [
+           closed |-> FALSE,
+           contents |-> <<>>
+         ],
+         observerInterrupt = FALSE;
 
 define
 PInDownstream == streams.PObs
 
 InHasElement == Len(streams.PIn.sent) < streams.PIn.nTake
+InHasSentAllElements == ~ InHasElement
+
 NextElement == Len(streams.PIn.sent) + 1
+
+Terminated(stream) == ~ stream.state = SRunning
 
 ObserverRequiresElement ==
   /\   streams.PObs.state = SRunning
   /\   streams.PObs.nRequested < streams.PObs.nTake
+ObsRequiresElement == streams.PObs.nRequested < streams.PObs.nTake
+ObsHasRequestedAllElements == ~ ObsRequiresElement
+ObsHasReceivedAllElements == streams.PObs.nRequested = Len(streams.PObs.received)
 
 OutRequiresElement == streams.POut.nRequested < streams.POut.nTake
 
 InInterrupted ==
   (observerScope = OParent \/ observerScope = OTransient) /\ observerInterrupt
-
-ObsRequiresElement == streams.PObs.nRequested < streams.PObs.nTake
-
-InHasSentAllElements == ~ InHasElement
-ObsHasRequestedAllElements == ~ ObsRequiresElement
-ObsHasReceivedAllElements == streams.PObs.nRequested = Len(streams.PObs.received)
 
 InEndState ==
   IF /\ ~ Terminated(streams.PIn)
@@ -153,13 +158,13 @@ InObserverEndState ==
   THEN
     IF /\ observerScope = OParent
        /\ InHasSentAllElements
-	 \/ ObsHasRequestedAllElements
+         \/ ObsHasRequestedAllElements
     THEN
       CASE streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\ ~ observerHandlesError  -> SErrored
-	[] streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\   observerHandlesError  -> SSucceeded
-	[] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements                           -> SCancelled
-	[] streams.PIn.termination = TSuccess                                                -> SSucceeded
-	[] OTHER                                                                             -> SSucceeded
+        [] streams.PIn.termination = TError /\ ~ ObsHasReceivedAllElements /\   observerHandlesError  -> SSucceeded
+        [] streams.PIn.termination = TCancel /\ ~ ObsHasReceivedAllElements                           -> SCancelled
+        [] streams.PIn.termination = TSuccess                                                -> SSucceeded
+        [] OTHER                                                                             -> SSucceeded
     ELSE
       IF InInterrupted
       THEN SCancelled
@@ -182,13 +187,13 @@ ObserverEndState ==
   ELSE IF observerScope = ONone THEN
     CASE streams.PIn.state = SCancelled                         -> StateFromTermination(streams.PObs.termination)
       [] streams.PIn.state = SSucceeded                         -> StateFromTermination(streams.PObs.termination)
-      [] streams.PIn.state = SErrored /\ ~ observerHandlesError -> SErrored   \* The error is propagated to the fore
+      [] streams.PIn.state = SErrored /\ ~ observerHandlesError -> SErrored
       [] streams.PIn.state = SErrored /\   observerHandlesError -> StateFromTermination(streams.PObs.termination)
       [] OTHER                                                  -> SSucceeded
-      \* Cancellation does not affect the observer stream. TODO: We're assuming that the observer now completes its work. Model infinite observer streams.
   ELSE streams.PObs.state
 
 
+(* Define invariants for sanity checking *)
 GuardIsNonNegative == guard >= 0
 end define;
 
@@ -206,23 +211,23 @@ end macro;
 
 (* This represents `sinkOut` in
 
-	val sinkOut: Stream[F, O] = {
-	  def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
-	    s.pull.uncons1.flatMap {
-	      case None => Pull.done
-	      case Some((ch, rest)) =>
-		Pull.output(ch) >> Pull.eval(outChan.send(ch) >> guard.acquire) >> go(rest)
-	    }
+        val sinkOut: Stream[F, O] = {
+          def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
+            s.pull.uncons1.flatMap {
+              case None => Pull.done
+              case Some((ch, rest)) =>
+                Pull.output(ch) >> Pull.eval(outChan.send(ch) >> guard.acquire) >> go(rest)
+            }
 
-	  go(self.chunks).stream
-	}
+          go(self.chunks).stream
+        }
 *)
 fair process in = "in"
 begin
   InOutput:
   while /\ ~ Terminated(streams.PIn)
-	/\ ~ InInterrupted
-	/\ ObsRequiresElement do
+        /\ ~ InInterrupted
+        /\ ObsRequiresElement do
     if ~ InHasElement then
       \* The observer has requested an element, but there are none to send.
       streams.PObs.nRequested := streams.PObs.nRequested + 1;
@@ -234,25 +239,25 @@ begin
       streams.PIn.sent := Append(streams.PIn.sent, local_el);
 
       InSendToChannel:
-	if \/ Terminated(streams.PIn)
-	   \/ InInterrupted then
-	  goto InComplete;
-	elsif ~ outChan.closed then
-	  outChan.contents := Append(outChan.contents, local_el);
-	else
-	  \* The output channel is closed. Keep sending elements to the observer,
-	  \* but don't send them to the channel.
-	  skip;
-	end if;
+        if \/ Terminated(streams.PIn)
+           \/ InInterrupted then
+          goto InComplete;
+        elsif ~ outChan.closed then
+          outChan.contents := Append(outChan.contents, local_el);
+        else
+          \* The output channel is closed. Keep sending elements to the observer,
+          \* but don't send them to the channel.
+          skip;
+        end if;
 
       InAcquireGuard:
-	if /\ ~ Terminated(streams.PIn)
-	   /\ ~ InInterrupted then
-	  acquire();
-	else
-	  \* The input has been terminated or interrupted
-	  skip;
-	end if;
+        if /\ ~ Terminated(streams.PIn)
+           /\ ~ InInterrupted then
+          acquire();
+        else
+          \* The input has been terminated or interrupted
+          skip;
+        end if;
       end if;
   end while;
 
@@ -269,10 +274,10 @@ begin
 end process;
 
 (* This represents runner in
-	val runner =
-	  sinkOut.through(pipe).onFinalize(outChan.close.void)
+        val runner =
+          sinkOut.through(pipe).onFinalize(outChan.close.void)
       ...
-	.concurrently(runner)
+        .concurrently(runner)
 
 The pipe may do anything with the sinkOut stream.
 
@@ -291,39 +296,38 @@ begin
   \* If the scope is not a parent, it is transient or unrelated and must be handled here
   if ~ observerScope = OParent then
     await \/ Terminated(streams.PObs)
-	  \/ Terminated(streams.PIn)
-	  \/ observerInterrupt;
+          \/ Terminated(streams.PIn)
+          \/ observerInterrupt;
   \* If the input stream has terminated, we assume that there is still work to be done by the observer
   \* The steps between the input termination and this step represents that work
     if ~ Terminated(streams.PObs) /\ ~ observerInterrupt /\ Terminated(streams.PIn) then
-      \* If the observer is running and has not been interrupted, and the in stream is running
-      \* then calculate the end state based on the observerScope and in termination
       streams.PObs.state := ObserverEndState;
     elsif /\ observerInterrupt /\ (observerScope = ONone \/ observerScope = OTransient) then
       if streams.PIn.state = SRunning then
-	streams.PIn.state := SCancelled || streams.PObs.state := SCancelled;
+        streams.PIn.state := SCancelled || streams.PObs.state := SCancelled;
       else
-	streams.PObs.state := SCancelled;
+        streams.PObs.state := SCancelled;
       end if;
     else
+      \* Either:
       \* - The observer has been interrupted and its scope is OParent. The interrupt is handled by the
-      \*     in process.
+      \*     "in" process.
       \* - The observer has been terminated, but not interrupted, by some other process.
-      \* - The in stream and the observer have both been terminated, but not interrupted, by some other process.
+      \* - The "in" stream and the observer have both been terminated, but not interrupted, by some other process.
       skip;
     end if;
   end if;
   ObserverOnFinalize:
-    await streams.PIn.hasFinalized; \* Wait for the in stream to terminate
+    await streams.PIn.hasFinalized; \* Wait for the "in" stream to terminate before closing the channel
     outChan.closed := TRUE;
 end process;
 
 (* Ths represents
-	def outStream =
-	  outChan.stream
-	    .flatMap { chunk =>
-	      Stream.chunk(chunk).onFinalize(guard.release)
-	    }
+        def outStream =
+          outChan.stream
+            .flatMap { chunk =>
+              Stream.chunk(chunk).onFinalize(guard.release)
+            }
 
     val out = outStream.concurrently(runner)
 
@@ -335,10 +339,10 @@ begin
 OutPopFromChannel:
 while local_running /\ OutRequiresElement do
     await    outChan.closed
-	  \/ Len(outChan.contents) > 0
-	  \/ Terminated(streams.POut)
-	  \/ streams.PObs.state = SErrored
-	  \/ outInterrupted;
+          \/ Len(outChan.contents) > 0
+          \/ Terminated(streams.POut)
+          \/ streams.PObs.state = SErrored
+          \/ outInterrupted;
     if outInterrupted /\ ~ Terminated(streams.POut) then
       streams.POut.nRequested := streams.POut.nRequested + 1 ||
       streams.POut.state := SCancelled;
@@ -353,19 +357,19 @@ while local_running /\ OutRequiresElement do
       outChan.contents := Tail(outChan.contents);
 
       OutOutput:
-	if ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted then
-	  streams.POut.received := Append(streams.POut.received, local_el);
+        if ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted then
+          streams.POut.received := Append(streams.POut.received, local_el);
 
-	  OutReleaseGuard:
-	    release();
-	else
-	 \* The stream has terminated or been interrupted by an error in the observer
-	 local_running := FALSE;
-	end if;
+          OutReleaseGuard:
+            release();
+        else
+         \* The stream has terminated or been interrupted by an error in the observer
+         local_running := FALSE;
+        end if;
     elsif ~ Terminated(streams.POut) /\ outChan.closed /\ Len(outChan.contents) = 0 then
-	\* The output channel is closed. We must close the downstream output stream
-	streams.POut.nRequested := streams.POut.nRequested + 1;
-	local_running := FALSE;
+        \* The output channel is closed. We must close the downstream output stream
+        streams.POut.nRequested := streams.POut.nRequested + 1;
+        local_running := FALSE;
     end if;
 end while;
 observerInterrupt := TRUE;
@@ -382,7 +386,7 @@ OutOnFinalize:
 end process;
 
 (* This represents:
-	val out = outStream.concurrently(runner)
+        val out = outStream.concurrently(runner)
 *)
 
 fair process outInterrupt = "out-interrupt"
