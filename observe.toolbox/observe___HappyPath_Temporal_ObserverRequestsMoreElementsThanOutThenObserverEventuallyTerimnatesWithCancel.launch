@@ -5,7 +5,7 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="37"/>
+    <intAttribute key="fpIndex" value="118"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
