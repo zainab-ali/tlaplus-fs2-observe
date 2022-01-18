@@ -11,12 +11,12 @@ EXTENDS Integers, Sequences, FiniteSets, TLC
  
     val sinkOut: Stream[F, O] = {
       def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
-        s.pull.uncons1.flatMap { \\ InOutput
+        s.pull.uncons1.flatMap { // InOutput
           case None => Pull.done
           case Some((ch, rest)) =>
             Pull.output(ch) >>
-             Pull.eval(outChan.send(ch) \\ InSendToChannel
-                       >> guard.acquire \\ InAcquireGuard
+             Pull.eval(outChan.send(ch) // InSendToChannel
+                       >> guard.acquire // InAcquireGuard
                        ) >>
                     go(rest)
         }
@@ -25,17 +25,17 @@ EXTENDS Integers, Sequences, FiniteSets, TLC
     }
  
     val runner =
-      sinkOut.through(pipe)             \\ InComplete, ObserverComplete
-        .onFinalize(outChan.close.void) \\ ObserverOnFinalize
+      sinkOut.through(pipe)             // InComplete, ObserverComplete
+        .onFinalize(outChan.close.void) // ObserverOnFinalize
  
     def outStream =
-      outChan.stream \\ OutPopFromChannel
+      outChan.stream // OutPopFromChannel
         .flatMap { chunk =>
-          Stream.chunk(chunk) \\ OutOutput
-            .onFinalize(guard.release) \\ OutReleaseGuard
+          Stream.chunk(chunk) // OutOutput
+            .onFinalize(guard.release) // OutReleaseGuard
         }
  
-    val out = outStream.concurrently(runner)  \\ OutOnFinalize
+    val out = outStream.concurrently(runner)  // OutOnFinalize
     out
   }
  ```
