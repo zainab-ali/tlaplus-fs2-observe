@@ -39,20 +39,20 @@ The implementation of `observe` contains several processes:
  
     val runner =
       sinkOut.through(pipe)             // InComplete, ObserverComplete
-        .onFinalize(outChan.close.void) // ObserverOnFinalize
+        ++ Stream.exec(outChan.close.void) // ObserverOnFinalize
  
     def outStream =
       outChan.stream // OutPopFromChannel
         .flatMap { chunk =>
           Stream.chunk(chunk) // OutOutput
-            .onFinalize(guard.release) // OutReleaseGuard
+            ++ Stream.exec(guard.release) // OutReleaseGuard
         }
  
     val out = outStream.concurrently(runner)  // OutOnFinalize
     out
 ```
 
-These can be roughly thought of as the `in`, `out` and `observer` process.
+These can be roughly thought of as the `in`, `out` and `observer` process in `observe.tla`.
 
 ### Steps, state and properties
 
@@ -159,7 +159,7 @@ The observer may handle errors in the input with `handleErrorWith`, thus the obs
 
  2. The `observer` pipe must clean up resources on the `in` stream. A well-behaved observer must not start the `in` stream in a fiber and forget to cancel it.
  
-   This assumption affects the order of steps following `onFinalize(channel.close)`. The `in` stream cannot take steps after the channel has been closed.
+    This assumption affects the order of steps following `onFinalize(channel.close)`. The `in` stream cannot take steps after the channel has been closed.
 
  3. The `observer` may run the `in` stream concurrently to itself. Elements may be pulled from the `in` stream independently of any work done in the observer. The `observer` may also cancel the `in` stream while it itself completes successfully.
  

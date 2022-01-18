@@ -26,13 +26,13 @@ EXTENDS Integers, Sequences, FiniteSets, TLC
  
     val runner =
       sinkOut.through(pipe)             // InComplete, ObserverComplete
-        .onFinalize(outChan.close.void) // ObserverOnFinalize
+        ++ Stream.exec(outChan.close.void) // ObserverOnFinalize
  
     def outStream =
       outChan.stream // OutPopFromChannel
         .flatMap { chunk =>
           Stream.chunk(chunk) // OutOutput
-            .onFinalize(guard.release) // OutReleaseGuard
+            ++ Stream.exec(guard.release) // OutReleaseGuard
         }
  
     val out = outStream.concurrently(runner)  // OutOnFinalize
