@@ -1,151 +1,104 @@
 # TLA+ and fs2
 
-This repository is an attempt at modelling some of fs2's behaviour in
-TLA+. It aims to verify that some of the concurrent code behaves as
-I'd like it to.
+This repository is an attempt at modelling the behaviour of the fs2 `observe` primitive in
+TLA+.
 
-Specifically, I want to verify that the implementation of `observe` is
-correct, and that [I can simplify it](https://github.com/typelevel/fs2/issues/2778
-). I'm concerned that the refactored code might contain race
-conditions, or different behaviour, but can't work this out by eye.
+Specifically, it verifies whether [a simplified implementation of observe](https://github.com/typelevel/fs2/issues/2778) is correct.
+The refactored code might contain race conditions, or have different behaviour, that is difficult to work out by eye.
 
-## Learning TLA+
-I've been using the [Learn TLA+ website](https://www.learntla.com/introduction/), written by Hillel,
-and have recorded my progress in `~/record/tlaplus`. The `~/tlaplus`
-directory contains examples used in the website.
+## Getting started
 
-Following that, I have skimmed through [Leslie Lamport's video tutorials](https://www.youtube.com/channel/UCajiu4Cj_GHOX0if3Up-eRA).
+The specification is written in TLA+ and PlusCal. You can get started with these tools by following the instructions on the [Learn TLA+ website](https://www.learntla.com/introduction/).
 
-## Prior Art on CSP
+## Developing a model
 
-Note that CSP has a different method of reasoning to that presented in
-TLA+. I'm including this prior art as food for thought.
+A PlusCal process is a series of sequential steps that can be interleaved in a non-deterministic order.
 
-The easiest model for reasoning about `fs2` is CSP. For example, the
-following code can be split into processes:
+The implementation of `observe` contains several processes:
 
 ```scala
-Stream(1,2,3)   // Process UPSTREAM
-.evalTap(
-  q.enqueue     // Process QUEUE
-)
-.concurrently(  // Process DOWNSTREAM
-  q.dequeue     // Process QUEUE
-)
-.compile.drain
+  for {                                                                 
+    guard <- Semaphore[F](maxQueued - 1)
+    outChan <- Channel.unbounded[F, Chunk[O]]
+  } yield {
+ 
+    val sinkOut: Stream[F, O] = {
+      def go(s: Stream[F, Chunk[O]]): Pull[F, O, Unit] =
+        s.pull.uncons1.flatMap { \\ InOutput
+          case None => Pull.done
+          case Some((ch, rest)) =>
+            Pull.output(ch) >>
+             Pull.eval(outChan.send(ch) \\ InSendToChannel
+                       >> guard.acquire \\ InAcquireGuard
+                       ) >>
+                    go(rest)
+        }
+ 
+      go(self.chunks).stream
+    }
+ 
+    val runner =
+      sinkOut.through(pipe)             \\ InComplete, ObserverComplete
+        .onFinalize(outChan.close.void) \\ ObserverOnFinalize
+ 
+    def outStream =
+      outChan.stream \\ OutPopFromChannel
+        .flatMap { chunk =>
+          Stream.chunk(chunk) \\ OutOutput
+            .onFinalize(guard.release) \\ OutReleaseGuard
+        }
+ 
+    val out = outStream.concurrently(runner)  \\ OutOnFinalize
+    out
 ```
 
-The messages sent between these processes are requests, responses and
-cancellations. fs2's `uncons` can be thought of as a `request` message
-sent from `DOWNSTREAM` to `MID`, and it's result as a `response`
-message sent from `MID` to `DOWNSTREAM`. The `evalTap` performs a
-`Pull.eval`, which can be thought of as a `start eval` and `stop eval`
-message sent between `MID` and `QUEUE`.
+These can be roughly thought of as the `in`, `out` and `observer` process.
 
-Note that the `UPSTREAM` and `DOWNSTREAM` processes can probably be
-combined into a single process that communicates with `QUEUE`, however
-it is then harder to see the parallels between this combined process
-and the original code.
+### Steps, state and properties
 
-Edwin Brady has a paper on encoding CSP rules in Idris that may be
-helpful, should I try and encode this reasoning using a dependently
-typed Finite State Machine. However, I'll start with TLA+ and see
-where I end up.
-
-# Phrasing the problem
-
-Phrasing a problem in TLA+ seems to be a step-by-step process:
+In order to describe a problem in TLA+ and PlusCal, we must:
  1. Identify the **properties** of the system. 
     
 	These are the invariants. For example ”all elements that were
-    pulled from upstream must have been requested”.
+    pulled from the input must have been requested by the output”.
 
  2. Identify the **steps** of the computation.
  
     These are the atomic units that the evaluator can take when
-    interleaving the code. Think “If this was a co-routine, where
-    would it yield?”.
+    interleaving the code.
 	
  3. Model the **state** that is changed at each step.
 
-    Creating a decent model is somewhat of an art. The primitive types
-    of TLA+ aren’t too similar to a usual programming language.
+Each step, indicated by a comment in the `observe` code above, is given a label and an associated state change. 
+At each step, we can make assertions about the state of the system and verify that it satisfies certain properties (invariants and temporal properties).
 
-I expect that the yield points will be the most tricky to identify. It
-would be easy to spec out an incorrect model of the way fs2 works by
-mis-identifying its yield points.
-	
+The state is a simplified representation of the stream system that we can make these assertions on. For example:
+ - The sequence of sent elements 
+ - The sequence of received elements
+ - The number of elements requested from upstream
+ - The exit state of the stream
 
-# Identifying yield points
+The `ObserverSpec` describes this state and the assertions made on it.
 
-The yield points are dependent on the fs2 `Pull` interrupt semantics,
-as defined in the pull `compile` function, and the cats-effect `race`
-semantics.
+### Interruptions
 
-To simplify things, we can assume that a program can yield at every
-`flatMap`, and that `race` polls a completion flag for two
-operations.
-
-# Iterating the code
-
-## A naive observe implementation
-
-A naive attempt at `observe` would be:
+The `in` and `out` processes may be interrupted by an external event. For example, an interrupt of the `in` stream may look like:
 
 ```scala
-upstream
-  .evalMap(q.enqueue)
-  .concurrently(q.dequeue.through(pipe))
+in.observe(_.interruptAfter(1.second))
 ```
 
-There are a few problems with this implementation:
- - It does not terminate if the `pipe` requests fewer elements than
-   are pulled by the output stream
- - The pipe is cancelled nondeterministically (sometimes the left stream terminates first).
-
-These can both be identified by TLA+.
-
-## An observe implementation with cancellation
-
-The following code ensures that the observer isn't cancelled:
+An interrupt of the `out` stream may look like:
 
 ```scala
-upstream.evalMap(q.enqueue)
-  .concurrently(q.dequeue.through(pipe))
-  
-// Only when the upstream terminates do we close the queue
-q.dequeue
-  .concurrently(
-  upstream.evalTap(q.enqueue).through(pipe) ++ q.close
-  )
+in.observe(identity).interruptAfter(1.second)
 ```
 
-# Thoughts
-
-It would be worth writing some library code for:
- - the `q.dequeue` process
- - the `evalTap(q.enqueue)` process
-
-```
-upstream.evalMap(q.enqueue)
-  .concurrently(q.dequeue.through(pipe))
-  
-// Only when the upstream terminates do we close the queue
-(sem.release > q.dequeue)
-  .concurrently(
-  upstream.evalTap(sem.acquire >> q.enqueue).through(pipe) ++ q.close
-  )
-```
+Interruptions can also be represented as single-step PlusCal processes. These processes set flags that other processes can query.
 
 # Properties of `observe`
 
-Consider
-
-```
-output = input.observe(pipe)
-```
-
-I think any implementation of `observe` should satisfy:
+Any implementation of `observe` should satisfy:
  - If `input` is finite, then `output` terminates
  - If the `input` terminates with an error, then the `output` terminates with an error
  - If the `observer` terminates with an error, then the `output` terminates with an error
@@ -158,90 +111,47 @@ I think any implementation of `observe` should satisfy:
  - If the `observer` terminates successfully, then the elements pulled by it should be equal to those pulled from `input`
  - If the `observer` cancels itself, then the `output` is cancelled 
  - If the `output` cancels itself, then the `observer` is cancelled. 
-
-*NOTE* According to the `observe` tests, the `observer` can possibly be one element ahead of the output:
-
-```scala
-group("handle finite observing sink") {
-  test("2") {
-    forAllF { (s: Stream[Pure, Int]) =>
-      observer(Stream(1, 2) ++ s.covary[IO])(_.take(1).drain).compile.toList
-        .assertEquals(Nil)
-    }
-  }
-}
-```
-
-## The state
-
-In order to assert these properties, we need:
- - A state of `Succeeded`, `Cancelled`, `Running` and `Errorred` that can be applied to the `input`, `observe` and `output`
- - The sequence of elements pulled from `input`
- - The number of elements requested by `output`
- - The number of elements requested by `observer`
- - The sequence of elements received by `output`
- - The sequence of elements received by `observer`
  
-We can represent this as
+# Conclusions
 
-```
-state \E { SRunning, SSucceeded, SCancelled, SErrored }
-P \E { PObserver, POutput, PInput }
-el \E {Nat}
-stream[P].nRequested \E <<el>>
-stream[P].received \E <<el>> \* Note that stream[P_input].received doesn't make any sense. We could use it to represent the set of elements to pull downstream.
-stream[P].sent \E <<el>>
-```
+1. The refactored code is not exactly the same as the original code.
+   The observer may swallow errors generated by the input stream. For example:
 
-We must also configure:
- - An `infinite` boolean value, indicating if `input` is infinite
- - The number of elements to be requested by `output`
- - The number of elements to be requested by `observer`
- - The sequence of elements to be sent by `input`
- - Whether the `input` should terminate with an error
- - The element index at which the `observer` should terminate with an error, if any
- - The element index at which the `output` should terminate with an error, if any
- - The element index at which the `observer` should terminate with a cancellation, if any
- - The element index at which the `output` should terminate with a cancellation, if any
+   ```scala
+   val out = in.observe(_.handleErrorWith(_ => Stream.empty))
+   ```
+   
+   The error is not propagated from the `in` to the `out` stream.
 
-```
-stream[P].nTake \E ({INF} \U Nat)
-stream[P].terimation = { TNormal, TError, TCancel}
-```
+2. Both the refactored and original code violate an invariant: the number of elements sent by the input is not equivalent to the number received by the output, even when the entire system terminates successfully. The observer may request one more element from the input stream than the output. This is actually tested in the `StreamObserveSuite`:
 
-This model is slightly more complex than we need to represent all of
-the invariants. However, it does generalize nicely to different stream
-components (the same state structure can be used for input, output and
-observe). 
+   ```scala
+   group("handle finite observing sink") {
+     test("2") {
+       forAllF { (s: Stream[Pure, Int]) =>
+         observer(Stream(1, 2) ++ s.covary[IO])(_.take(1).drain).compile.toList
+           .assertEquals(Nil)
+       }
+     }
+   }
+   ```
 
-Most of the invariants can be expressed, except for:
- - [ ] If `in` is finite, then `out` terminates
- - [ ] If the `in` is finite and the `observer` requests the same number of elements as the `out`, then the `out` and `observer` should both complete.
+3. On the positive side, the refactored code does terminate in all cases.
 
-# Thoughts on Assumptions
+# Details
 
-The output must request at least one element for the system to run. This puts a lower bound of 1 on `out.nTake`.
+## The observer and input relationship
 
-The observer scope may have any sort of relationship to the input scope. This makes error propagation and cancellation difficult to model, as these are dependent on the scope relationship. We will classify the relationship as one of:
+The observer pipe is written by the user, thus the observer scope may have any sort of relationship to the input scope. This makes error propagation and cancellation difficult to model, as these are dependent on the scope relationship. We will classify the relationship as one of:
  - `OParent`, implying that the observer is a parent of the input. For example, `observer = _.take(3)`
  - `OTransient`, implying that the observer is a parent of the input at some point in time. For example `observer = _ ++ other`
  - `ONone`, implying that the input and observer scopes are unrelated. The input may run concurrently to the observer. We have to assume certain error propagation behaviours in this case.
  
+## Error handling in the observer
+ 
 The observer may handle errors in the input with `handleErrorWith`, thus the observer termination state doesn't necessarily reflect the input termination state.
 
-# Thoughts on cancellation
-
-Cancellation is performed through an interrupt that is raced at each task.
- - How do interrupts work with concurrently? If we interrupt the output stream, how is the background cancelled?
-
-Cancellation occurs when a stream is started in a different fiber, and that fiber is cancelled.
-
-If the observer stream doesn't fork the input stream, then the input stream is cancelled exactly when the observer stream is cancelled.
-If the observer stream forks the input stream, then the observer stream may be cancelled, and may decide to cancel the input stream.
-
-When the observer stream terminates, via cancellation or otherwise, it may decide to cancel
-
-# Assumptions
+## Assumptions
 
  1. The effect that creates the `observe` system and starts it concurrently is only created if an element is pulled downstream. Thus, the `out` stream must pull at least one element.
  
@@ -253,91 +163,4 @@ When the observer stream terminates, via cancellation or otherwise, it may decid
 
  3. The `observer` may run the `in` stream concurrently to itself. Elements may be pulled from the `in` stream independently of any work done in the observer. The `observer` may also cancel the `in` stream while it itself completes successfully.
  
- If the `observer` stream is cancelled, then it must cancel the `in` stream. It does so before closing the channel with `onFinalize(channel.close)`.
- 
-
-
-# Understanding Cancellation
-
-PlusCal introduces the idea of a process - a series of sequential steps. Processes run independently of each other, meaning that they can interleave their steps. 
-
-Streams are sequential by default, so a stream system should be modelled as a single process. This makes streams difficult to map to PlusCal code as their unit of composition doesn't map to a process.
-
-Nevertheless, it is not good practice to try and model them with processes than necessary as this can cause TLA to find behaviours that would be impossible in the real system. It also makes behaviour traces quite convoluted.
-
-Cancellation occurs when a stream is started in a different thread and its fiber is cancelled. We can model cancellation by setting the cancellation flag in one process and checking it in the process that does work.
-
-## Cancellation and errors in the observer
-
-The observer pipe is a function, and so could be anything. The following are all valid observer pipes:
-
-
-
-```scala
-identity
-```
-
-```scala
-_ => other
-```
-
-```scala
-in => other.concurrently(in)
-```
-
-```scala
-_ ++ other
-```
-
-The `observer` is the stream that is constructed by the observer pipe. is run in a different fiber using `concurrently`, so may be cancelled.
- - For the identity observer, cancelling the observer is analagous to cancelling the input.
- - The empty observer does not pull on the input whatsoever. Cancelling it has no effect on the input.
-   - Nothing is ever sent to the channel
-   - The channel is closed once the observer finishes
-   - The observer may still do work
- - The concurrent observer is cancelled, and will cancel the input. The input's finalizers are run before the observer's finalizers.
- - The concat observer has work to do after pulling on the in stream. When cancelled it may or may not cancel the observer.
- 
-There are several cases:
- - The in stream may complete before the observer is cancelled (as in `concat` and `concurrently`)
-   `observer = in ++ other`
-   => The `in` stream should transition to `done` independently of the observer
- - The `in` stream may never do anything (as in `_ => other`). Mark it as complete 
- - The `in` stream may depend on the observer. We can see this as the observer having no work, or not doing its work.
- 
-The cases are
- - the `in` stream and `obs` stream are cancelled in the same step
- - the `obs` stream is cancelled first, then the `in` stream, such that the `in` stream may complete before the `obs` stream.
-   => The `obs` stream needs to do work independently of the `in` stream. This can be as simple as checking its cancellation flag.
- - at each step in the sinkOut, check if the observer has been cancelled. If it has, then cancel the 
-
-If the observer is NOT synchronous then it may terminate gracefully at some step AFTER the input stream has terminated
-
-# Understanding scopes
-
-The different kinds of input-observer relationships can be summarized by different scoping rules:
- - No related scope, such as in `concurrently`
- - A parent-child relation, such as in `.take`
- - A transient parent-child relation, one that doesn't exist all the time, such as in `++`
- 
-Additionally, scopes can affect how errors are handled.
-
-`handleErrorWith` creates a parent scope which succeeds when the child scope fails.
-
-```
-(Stream(1) ++ Stream.raiseError[IO](new Error())
-  .covaryOutput[Int])
-  .onFinalizeCase(c => IO.println(s"Finalized 1 with $c"))
-  .handleErrorWith(_ => Stream(2, 3))
-  .onFinalizeCase(c => IO.println(s"Finalized 2 with $c"))
-  .compile.drain
-```
-
-So the observer may have a `handleErrorWith`, and thus will succeed even if the input fails.
-
-The input is cancelled then linked parent scope is also cancelled.
-
-
-Next steps:
- - Write up findings
- - Try a version with ++ for the guard and channel closing.
+    If the `observer` stream is cancelled, then it must cancel the `in` stream. It does so before closing the channel with `onFinalize(channel.close)`.
