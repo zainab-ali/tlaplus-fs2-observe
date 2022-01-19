@@ -5,13 +5,13 @@
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="75"/>
+    <intAttribute key="fpIndex" value="77"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="inNTake, inInterrupted, outTermination, local_el, outInterrupted, local_running, obsNTake, pc, obsTermination, observerInterrupt, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
+    <stringAttribute key="modelBehaviorVars" value="inNTake, inInterrupted, outTermination, observerInterrupted, local_el, outInterrupted, local_running, obsNTake, pc, obsTermination, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
     <stringAttribute key="modelComments" value=""/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">

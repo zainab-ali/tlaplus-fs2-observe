@@ -1,25 +1,28 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <launchConfiguration type="org.lamport.tla.toolbox.tool.tlc.modelCheck">
-    <stringAttribute key="configurationName" value="HappyPath_Bug_OutSucceedsThenOutElementsEqualsInElements"/>
+    <stringAttribute key="configurationName" value="Temporal_OuIsCancelledThenObserverEventuallyTerminatesWithCancel"/>
     <intAttribute key="distributedFPSetCount" value="0"/>
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="66"/>
+    <intAttribute key="fpIndex" value="46"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="inNTake, outTermination, local_el, outInterrupted, local_running, obsNTake, pc, obsTermination, observerInterrupt, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
-    <stringAttribute key="modelComments" value="If the observer requests one more element than the output, then that element is sent to the observer but not to the output."/>
+    <stringAttribute key="modelBehaviorVars" value="inNTake, inInterrupted, outTermination, observerInterrupted, local_el, outInterrupted, local_running, obsNTake, pc, obsTermination, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
+    <stringAttribute key="modelComments" value="This is a bug in the property, not in the actual code."/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
         <listEntry value="0InSendsOnlyElementsThanOutRequests"/>
-        <listEntry value="1OutSucceedsThenOutElementsEqualsInElements"/>
+        <listEntry value="1InSendsOnlyElementsThanObsRequests"/>
+        <listEntry value="1InSendsAtMostOneMoreThanOutReceives"/>
+        <listEntry value="0OutSucceedsThenOutElementsEqualsInElements"/>
+        <listEntry value="1ObserverSucceedsThenObserverElementsEqualsInElements"/>
     </listAttribute>
     <listAttribute key="modelCorrectnessProperties">
-        <listEntry value="0Termination"/>
+        <listEntry value="1OuIsCancelledThenObserverEventuallyTerminatesWithCancel"/>
     </listAttribute>
     <intAttribute key="modelEditorOpenTabs" value="8"/>
     <stringAttribute key="modelExpressionEval" value=""/>
@@ -33,7 +36,7 @@
         <listEntry value="SRunning;;S_Running;0;0"/>
         <listEntry value="SSucceeded;;S_Succeeded;0;0"/>
         <listEntry value="SErrored;;S_Errored;0;0"/>
-        <listEntry value="inNTakeRange;;{2};0;0"/>
+        <listEntry value="inNTakeRange;;{2, 3};0;0"/>
         <listEntry value="obsNTakeRange;;{2};0;0"/>
         <listEntry value="outNTakeRange;;{1};0;0"/>
         <listEntry value="observerHandlesErrorRange;;BOOLEAN;0;0"/>
@@ -47,8 +50,8 @@
         <listEntry value="TCancel;;T_Cancel;0;0"/>
         <listEntry value="TSuccess;;T_Success;0;0"/>
         <listEntry value="inTerminationRange;;{TSuccess};0;0"/>
-        <listEntry value="outTerminationRange;;{TSuccess};0;0"/>
         <listEntry value="obsTerminationRange;;{TSuccess};0;0"/>
+        <listEntry value="outTerminationRange;;{TCancel};0;0"/>
     </listAttribute>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="4"/>

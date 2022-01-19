@@ -33,7 +33,7 @@ InSendsAtMostOneMoreThanOutReceives ==
 
 \* If the output terminates successfully, then the elements pulled by it should be equal to those pulled from the input
 OutSucceedsThenOutElementsEqualsInElements ==
-  streams.POut.state = SSucceeded
+  streams.POut.state = SSucceeded /\ streams.PIn.state = SSucceeded
   => streams.POut.received = streams.PIn.sent
 
 \* If the observer terminates successfully, then the elements it receives by it should be equal to those sent from the input
@@ -71,14 +71,7 @@ ObserverRequestsMoreElementsThanOutThenObserverEventuallyTerimnatesWithCancel ==
   /\ streams.PObs.nRequested > streams.POut.nRequested
   ~> streams.PObs.state = SCancelled
 
-\* FIXME: This is untrue
-\* If the observer is cancelled then the output should also be cancelled.
-ObserverIsCancelledThenOutputEventuallyTerminatesWithCancel ==
-  /\ streams.PObs.state = SCancelled
-  /\ streams.POut.state = SRunning
-  ~> streams.POut.state = SCancelled
-
-\* FIXME: This is untrue. Only if the observer requests more elements than out
+\* FIXME: This is only true if the observer requests more elements than out, as in the case above.
 \* If the output is cancelled then the observer should also be cancelled.
 OuIsCancelledThenObserverEventuallyTerminatesWithCancel ==
   /\ streams.POut.state = SCancelled

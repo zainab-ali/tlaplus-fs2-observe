@@ -270,7 +270,9 @@ begin
       InSendToChannel:
         if \/ Terminated(streams.PIn)
 	       \/ inInterrupted
-           \/ ObserverInterrupted then
+           \/ ObserverInterrupted
+	   \/ ~ ObsRequiresElement (* If the observer has sent its last element, do not evaluate more effects *)
+	   then
           goto InComplete;
         elsif ~ outChan.closed then
           outChan.contents := Append(outChan.contents, local_el);
@@ -372,7 +374,7 @@ while local_running /\ OutRequiresElement do
           streams.POut.received := Append(streams.POut.received, local_el);
 
           OutReleaseGuard:
-            if ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted then
+            if ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted /\ OutRequiresElement then
               release();
 	    else
 	      local_running := FALSE;
@@ -425,7 +427,7 @@ end algorithm;
 *)
 
 
-\* BEGIN TRANSLATION (chksum(pcal) = "1221cc68" /\ chksum(tla) = "95da467f")
+\* BEGIN TRANSLATION (chksum(pcal) = "66787630" /\ chksum(tla) = "349b4b5a")
 VARIABLES observerScope, observerHandlesError, inNTake, outNTake, obsNTake, 
           inTermination, obsTermination, outTermination, inInterrupted, 
           outInterrupted, observerInterrupted, streams, guard, outChan, pc
@@ -597,6 +599,7 @@ InSendToChannel == /\ pc["in"] = "InSendToChannel"
                    /\ IF \/ Terminated(streams.PIn)
                              \/ inInterrupted
                          \/ ObserverInterrupted
+                         \/ ~ ObsRequiresElement
                          THEN /\ pc' = [pc EXCEPT !["in"] = "InComplete"]
                               /\ UNCHANGED outChan
                          ELSE /\ IF ~ outChan.closed
@@ -756,7 +759,7 @@ OutOutput == /\ pc["out"] = "OutOutput"
                              observerInterrupted, guard, outChan, local_el >>
 
 OutReleaseGuard == /\ pc["out"] = "OutReleaseGuard"
-                   /\ IF ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted
+                   /\ IF ~ Terminated(streams.POut) /\ ~ streams.PObs.state = SErrored /\ ~ outInterrupted /\ OutRequiresElement
                          THEN /\ guard' = guard + 1
                               /\ UNCHANGED local_running
                          ELSE /\ local_running' = FALSE
@@ -839,5 +842,5 @@ INSTANCE ObserveSpec
 
 =============================================================================
 \* Modification History
-\* Last modified Tue Jan 18 14:03:19 GMT 2022 by zainab
+\* Last modified Wed Jan 19 18:10:58 GMT 2022 by zainab
 \* Created Mon Jan 03 18:56:25 GMT 2022 by zainab

@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <launchConfiguration type="org.lamport.tla.toolbox.tool.tlc.modelCheck">
-    <stringAttribute key="configurationName" value="HappyPath_Temporal_ObserverTerminatesWithErrorThenOutEventuallyTerminatesWithError"/>
+    <stringAttribute key="configurationName" value="Bug_Temporal_InTerminatesWithErrorThenOutEventuallyTerminatesWithError"/>
     <intAttribute key="distributedFPSetCount" value="0"/>
     <stringAttribute key="distributedNetworkInterface" value="10.0.0.79"/>
     <intAttribute key="distributedNodesCount" value="1"/>
     <stringAttribute key="distributedTLC" value="off"/>
-    <intAttribute key="fpIndex" value="45"/>
+    <intAttribute key="fpIndex" value="20"/>
     <intAttribute key="maxHeapSize" value="25"/>
     <stringAttribute key="modelBehaviorInit" value="/\  pc = &quot;A&quot;&#10;/\  streams = [PIn |-&gt; [state |-&gt; S_Running, sent |-&gt; &lt;&lt;&gt;&gt;], POut |-&gt; [state |-&gt; S_Running, nRequested |-&gt; 0]]"/>
     <stringAttribute key="modelBehaviorNext" value="Spec"/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="inNTake, inInterrupted, outTermination, local_el, outInterrupted, local_running, obsNTake, pc, obsTermination, observerInterrupt, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
-    <stringAttribute key="modelComments" value=""/>
+    <stringAttribute key="modelBehaviorVars" value="inNTake, outTermination, local_el, outInterrupted, local_running, obsNTake, pc, obsTermination, observerInterrupt, observerScope, outNTake, streams, guard, outChan, inTermination, observerHandlesError"/>
+    <stringAttribute key="modelComments" value="There may be a bug where the observer is defined as:&#10; _.handleErrorWith(recoveryStream)&#10; &#10; As the error will not be propagated to the output stream."/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
         <listEntry value="0InSendsOnlyElementsThanOutRequests"/>
@@ -22,7 +22,10 @@
         <listEntry value="1ObserverSucceedsThenObserverElementsEqualsInElements"/>
     </listAttribute>
     <listAttribute key="modelCorrectnessProperties">
-        <listEntry value="1ObserverTerminatesWithErrorThenOutEventuallyTerminatesWithError"/>
+        <listEntry value="0Termination"/>
+        <listEntry value="0ObserverRequestsMoreElementsThanOutThenObserverEventuallyTerimnatesWithCancel"/>
+        <listEntry value="0InTerminatesWithErrorThenOutEventuallyTerminatesWithError"/>
+        <listEntry value="1&lt;&gt;(streams.POut.state  = SErrored)"/>
     </listAttribute>
     <intAttribute key="modelEditorOpenTabs" value="8"/>
     <stringAttribute key="modelExpressionEval" value=""/>
@@ -36,9 +39,9 @@
         <listEntry value="SRunning;;S_Running;0;0"/>
         <listEntry value="SSucceeded;;S_Succeeded;0;0"/>
         <listEntry value="SErrored;;S_Errored;0;0"/>
-        <listEntry value="inNTakeRange;;0..3;0;0"/>
-        <listEntry value="obsNTakeRange;;0..3;0;0"/>
-        <listEntry value="outNTakeRange;;1..3;0;0"/>
+        <listEntry value="inNTakeRange;;{1};0;0"/>
+        <listEntry value="obsNTakeRange;;{2};0;0"/>
+        <listEntry value="outNTakeRange;;{2};0;0"/>
         <listEntry value="observerHandlesErrorRange;;BOOLEAN;0;0"/>
         <listEntry value="ONone;;O_None;0;0"/>
         <listEntry value="ObserverScopes;;{O_Parent, O_None, O_Transient};1;0"/>
@@ -49,14 +52,18 @@
         <listEntry value="TerminationStates;;{T_Error, T_Cancel, T_Success};1;0"/>
         <listEntry value="TCancel;;T_Cancel;0;0"/>
         <listEntry value="TSuccess;;T_Success;0;0"/>
-        <listEntry value="inTerminationRange;;{TSuccess, TError, TCancel};0;0"/>
-        <listEntry value="obsTerminationRange;;{TSuccess, TError};0;0"/>
-        <listEntry value="outTerminationRange;;{TSuccess, TCancel};0;0"/>
+        <listEntry value="inTerminationRange;;{TError};0;0"/>
+        <listEntry value="outTerminationRange;;{TSuccess};0;0"/>
+        <listEntry value="obsTerminationRange;;{TSuccess};0;0"/>
     </listAttribute>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="4"/>
     <stringAttribute key="result.mail.address" value=""/>
     <stringAttribute key="specName" value="observe"/>
     <stringAttribute key="tlcResourcesProfile" value="local custom"/>
+    <listAttribute key="traceExploreExpressions">
+        <listEntry value="1InEndState"/>
+        <listEntry value="1ObsRequiresElement"/>
+    </listAttribute>
     <setAttribute key="traceExploreExtends"/>
 </launchConfiguration>
